@@ -1,0 +1,11 @@
+// MsgOrder:       {{.Info.MsgOrder}}
+// MsgName:        {{.Info.MsgName}}
+// MsgDescription: {{.Info.MsgDescription}}
+// MsgHandler:     {{.Info.MsgHandler}}
+// MsgAccessLvl:   {{.Info.MsgAccessLvl}}
+type {{.Type}} struct {
+	{{- range $f := .Fields }}
+	{{$f.Name}} {{$f.Value -}}
+	{{- end }}
+}
+
