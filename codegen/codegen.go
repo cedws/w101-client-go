@@ -6,14 +6,12 @@ import (
 	"embed"
 	"fmt"
 	"github.com/beevik/etree"
-	"github.com/spf13/afero"
 	"go/format"
+	"io"
 	"os"
 	"strings"
 	"text/template"
 )
-
-var fs = afero.NewOsFs()
 
 //go:embed templates/*
 var templates embed.FS
@@ -48,7 +46,7 @@ type Protocol struct {
 	Messages []Message
 }
 
-func Generate(messagesPath string) error {
+func Generate(w io.Writer, messagesPath string) error {
 	doc := etree.NewDocument()
 
 	err := doc.ReadFromFile(messagesPath)
@@ -82,7 +80,10 @@ func Generate(messagesPath string) error {
 		return ErrorInvalidSyntax
 	}
 
-	fmt.Print(string(fmtd))
+	_, err = w.Write(fmtd)
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
