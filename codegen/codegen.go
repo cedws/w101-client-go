@@ -18,21 +18,6 @@ var fs = afero.NewOsFs()
 //go:embed templates/*
 var templates embed.FS
 
-type ProtocolInfo struct {
-	ServiceID           string
-	ProtocolType        string
-	ProtocolVersion     string
-	ProtocolDescription string
-}
-
-type MessageInfo struct {
-	MsgOrder       string
-	MsgName        string
-	MsgDescription string
-	MsgHandler     string
-	MsgAccessLvl   string
-}
-
 type Field struct {
 	Name  string
 	Value string
@@ -41,9 +26,26 @@ type Field struct {
 // HACK: Fields could be a map[string]string in theory, but the templating engine
 // will sort by keys and we need to preserve the order of the fields
 type Message struct {
-	Type   string
-	Info   MessageInfo
+	Type string
+	Meta struct {
+		MsgOrder       string
+		MsgName        string
+		MsgDescription string
+		MsgHandler     string
+		MsgAccessLvl   string
+	}
 	Fields []Field
+}
+
+type Protocol struct {
+	Package string
+	Meta    struct {
+		ServiceID   string
+		Type        string
+		Version     string
+		Description string
+	}
+	Messages []Message
 }
 
 func Generate(messagesPath string) error {
@@ -54,15 +56,139 @@ func Generate(messagesPath string) error {
 		return err
 	}
 
-	err = printProtocolInfo(doc)
+	var p Protocol
+	err = readProtocol(doc, &p)
 	if err != nil {
 		return err
 	}
 
-	err = printMessages(doc)
+	tmpl, err := template.ParseFS(templates, "templates/protocol.tmpl")
+	if err != nil {
+		panic("failed to parse template")
+	}
+
+	// Sadly need to buffer in memory because go/format doesn't want an io.Reader
+	buf := new(bytes.Buffer)
+	writer := bufio.NewWriter(buf)
+
+	err = tmpl.Execute(writer, p)
 	if err != nil {
 		return err
 	}
+	writer.Flush()
+
+	fmtd, err := format.Source(buf.Bytes())
+	if err != nil {
+		return ErrorInvalidSyntax
+	}
+
+	fmt.Print(string(fmtd))
+
+	return nil
+}
+
+func readProtocol(doc *etree.Document, p *Protocol) error {
+	err := readPackage(doc, p)
+	if err != nil {
+		return err
+	}
+
+	err = readProtocolInfo(doc, p)
+	if err != nil {
+		return err
+	}
+
+	err = readMessages(doc, p)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func readPackage(doc *etree.Document, p *Protocol) error {
+	p.Package = os.Getenv("GOPACKAGE")
+	if p.Package == "" {
+		return ErrorNoGoPackageEnv
+	}
+
+	return nil
+}
+
+func readMessages(doc *etree.Document, p *Protocol) error {
+	records := doc.FindElements("//RECORD")
+	if records == nil {
+		return ErrorMissingRecords
+	}
+
+	// Skip first record which is protocol info
+	for _, record := range records[1:] {
+		fields := record.FindElements("*")
+		if fields == nil {
+			return ErrorInvalidRecord
+		}
+
+		var msg Message
+
+		for _, field := range fields {
+			switch field.Tag {
+			case "_MsgOrder":
+				msg.Meta.MsgOrder = field.Text()
+			case "_MsgName":
+				msg.Meta.MsgName = field.Text()
+			case "_MsgDescription":
+				msg.Meta.MsgDescription = field.Text()
+			case "_MsgHandler":
+				txt := field.Text()
+
+				// HACK: Use the handler name as the message type because it's already PascalCased for us
+				msg.Type = strings.ReplaceAll(txt[4:], "_", "")
+				msg.Meta.MsgHandler = txt
+			case "_MsgAccessLvl":
+				msg.Meta.MsgAccessLvl = field.Text()
+			default:
+				attr := field.SelectAttr("TYPE")
+				if attr == nil {
+					return ErrorInvalidMessage
+				}
+				field := Field{
+					Name:  field.Tag,
+					Value: dmlToGoType(attr.Value),
+				}
+				msg.Fields = append(msg.Fields, field)
+			}
+		}
+
+		p.Messages = append(p.Messages, msg)
+	}
+
+	return nil
+}
+
+func readProtocolInfo(doc *etree.Document, p *Protocol) error {
+	record := doc.FindElement("//_ProtocolInfo/RECORD")
+	if record == nil {
+		return ErrorMissingProtocolInfo
+	}
+
+	search := map[string]string{
+		"ServiceID":           "",
+		"ProtocolType":        "",
+		"ProtocolVersion":     "",
+		"ProtocolDescription": "",
+	}
+	for k := range search {
+		val := record.FindElement(k)
+		if val == nil {
+			return ErrorMissingProtocolInfo
+		}
+		search[k] = val.Text()
+	}
+
+	p.Meta.ServiceID = search["ServiceID"]
+	p.Meta.Type = search["ProtocolType"]
+	p.Meta.Version = search["ProtocolVersion"]
+	p.Meta.Description = search["ProtocolDescription"]
 
 	return nil
 }
@@ -95,138 +221,4 @@ func dmlToGoType(typ string) string {
 	default:
 		panic(fmt.Sprintf("unknown DML type %v", typ))
 	}
-}
-
-func printMessages(doc *etree.Document) error {
-	tmpl, err := template.ParseFS(templates, "templates/message.tmpl")
-	if err != nil {
-		return err
-	}
-
-	msgs, err := readMessages(doc)
-	if err != nil {
-		return err
-	}
-
-	// Sadly need to buffer in memory because go/format doesn't want an io.Reader
-	buf := new(bytes.Buffer)
-	writer := bufio.NewWriter(buf)
-
-	for _, msg := range *msgs {
-		buf.Reset()
-
-		err = tmpl.Execute(writer, msg)
-		if err != nil {
-			return err
-		}
-		writer.Flush()
-
-		fmtd, err := format.Source(buf.Bytes())
-		if err != nil {
-			return err
-		}
-
-		fmt.Print(string(fmtd))
-	}
-
-	return nil
-}
-
-func printProtocolInfo(doc *etree.Document) error {
-	tmpl, err := template.ParseFS(templates, "templates/meta.tmpl")
-	if err != nil {
-		return err
-	}
-
-	meta, err := readProtocolInfo(doc)
-	if err != nil {
-		return err
-	}
-
-	err = tmpl.Execute(os.Stdout, meta)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func readMessages(doc *etree.Document) (*[]Message, error) {
-	records := doc.FindElements("//RECORD")
-	if records == nil {
-		return nil, ErrorMissingRecords
-	}
-
-	var messages []Message
-
-	// Skip first record which is protocol info
-	for _, record := range records[1:] {
-		fields := record.FindElements("*")
-		if fields == nil {
-			return nil, ErrorInvalidRecord
-		}
-
-		var msg Message
-
-		for _, field := range fields {
-			switch field.Tag {
-			case "_MsgOrder":
-				msg.Info.MsgOrder = field.Text()
-			case "_MsgName":
-				msg.Info.MsgName = field.Text()
-			case "_MsgDescription":
-				msg.Info.MsgDescription = field.Text()
-			case "_MsgHandler":
-				txt := field.Text()
-
-				// HACK: Use the handler name as the message type because it's already PascalCased for us
-				msg.Type = strings.ReplaceAll(txt[4:], "_", "")
-				msg.Info.MsgHandler = txt
-			case "_MsgAccessLvl":
-				msg.Info.MsgAccessLvl = field.Text()
-			default:
-				attr := field.SelectAttr("TYPE")
-				if attr == nil {
-					return nil, ErrorInvalidMessage
-				}
-				field := Field{
-					Name:  field.Tag,
-					Value: dmlToGoType(attr.Value),
-				}
-				msg.Fields = append(msg.Fields, field)
-			}
-		}
-
-		messages = append(messages, msg)
-	}
-
-	return &messages, nil
-}
-
-func readProtocolInfo(doc *etree.Document) (*ProtocolInfo, error) {
-	record := doc.FindElement("//_ProtocolInfo/RECORD")
-	if record == nil {
-		return nil, ErrorMissingProtocolInfo
-	}
-
-	search := map[string]string{
-		"ServiceID":           "",
-		"ProtocolType":        "",
-		"ProtocolVersion":     "",
-		"ProtocolDescription": "",
-	}
-	for k := range search {
-		val := record.FindElement(k)
-		if val == nil {
-			return nil, ErrorMissingProtocolInfo
-		}
-		search[k] = val.Text()
-	}
-
-	return &ProtocolInfo{
-		ServiceID:           search["ServiceID"],
-		ProtocolType:        search["ProtocolType"],
-		ProtocolVersion:     search["ProtocolVersion"],
-		ProtocolDescription: search["ProtocolDescription"],
-	}, nil
 }
