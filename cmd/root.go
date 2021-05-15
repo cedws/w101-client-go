@@ -14,6 +14,10 @@ var (
 		Short: "Generate Go code from a DML service definition",
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
+			if debug {
+				log.SetLevel(log.DebugLevel)
+			}
+
 			var f *os.File
 			var err error
 
@@ -42,10 +46,6 @@ func init() {
 }
 
 func Execute() {
-	if debug {
-		log.SetLevel(log.DebugLevel)
-	}
-
 	if err := rootCmd.Execute(); err != nil {
 		log.Fatal(err)
 	}

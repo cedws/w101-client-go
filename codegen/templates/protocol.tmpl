@@ -6,9 +6,11 @@ package {{ .Package }}
 // ProtocolVersion:     {{ .Meta.Version }}
 // ProtocolDescription: {{ .Meta.Description }}
 
+const Svc{{ .Service }} = {{ .Meta.ServiceID }}
+
 const (
 	{{ range $m := .Messages }}
-	Pkt{{ .Type}} = {{ .Meta.MsgOrder -}}
+	Pkt{{ .Type }} = {{ .Meta.MsgOrder -}}
 	{{ end }}
 )
 

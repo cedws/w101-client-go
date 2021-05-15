@@ -6,6 +6,7 @@ import (
 	"embed"
 	"fmt"
 	"github.com/beevik/etree"
+	"github.com/pkg/errors"
 	"go/format"
 	"io"
 	"os"
@@ -37,6 +38,7 @@ type Message struct {
 
 type Protocol struct {
 	Package string
+	Service string
 	Meta    struct {
 		ServiceID   string
 		Type        string
@@ -77,7 +79,7 @@ func Generate(w io.Writer, messagesPath string) error {
 
 	fmtd, err := format.Source(buf.Bytes())
 	if err != nil {
-		return ErrorInvalidSyntax
+		return errors.Wrap(err, "generated code had invalid syntax")
 	}
 
 	_, err = w.Write(fmtd)
@@ -190,6 +192,8 @@ func readProtocolInfo(doc *etree.Document, p *Protocol) error {
 	p.Meta.Type = search["ProtocolType"]
 	p.Meta.Version = search["ProtocolVersion"]
 	p.Meta.Description = search["ProtocolDescription"]
+
+	p.Service = strings.Title(strings.ToLower(p.Meta.Type))
 
 	return nil
 }
