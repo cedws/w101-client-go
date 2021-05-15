@@ -209,7 +209,7 @@ func dmlToGoType(typ string) string {
 	case "USHRT":
 		return "uint16"
 	case "INT":
-		return "int"
+		return "int32"
 	case "UINT":
 		return "uint32"
 	case "STR":
