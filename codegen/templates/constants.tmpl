@@ -1,0 +1,6 @@
+const (
+	{{ range $m := .Messages }}
+	Pkt{{ .Type }} = {{ .Meta.MsgOrder -}}
+	{{ end }}
+)
+

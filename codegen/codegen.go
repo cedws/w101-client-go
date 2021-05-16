@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/beevik/etree"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 	"go/format"
 	"io"
 	"os"
@@ -15,7 +16,7 @@ import (
 )
 
 //go:embed templates/*
-var templates embed.FS
+var fs embed.FS
 
 type Field struct {
 	Name  string
@@ -48,46 +49,66 @@ type Protocol struct {
 	Messages []Message
 }
 
-func Generate(w io.Writer, messagesPath string) error {
+func Generate(w io.Writer, messagesPath string) (err error) {
 	doc := etree.NewDocument()
 
-	err := doc.ReadFromFile(messagesPath)
+	err = doc.ReadFromFile(messagesPath)
 	if err != nil {
-		return err
+		return
 	}
 
 	var p Protocol
 	err = readProtocol(doc, &p)
 	if err != nil {
-		return err
+		return
 	}
 
-	tmpl, err := template.ParseFS(templates, "templates/protocol.tmpl")
+	var (
+		preamble  = template.Must(template.ParseFS(fs, "templates/preamble.tmpl"))
+		constants = template.Must(template.ParseFS(fs, "templates/constants.tmpl"))
+		message   = template.Must(template.ParseFS(fs, "templates/message.tmpl"))
+	)
+
+	err = formatTemplate(preamble, w, p)
 	if err != nil {
-		panic("failed to parse template")
+		return
+	}
+	err = formatTemplate(constants, w, p)
+	if err != nil {
+		return
 	}
 
+	for _, m := range p.Messages {
+		err = formatTemplate(message, w, m)
+		if err != nil {
+			err = errors.Wrapf(err, "codegen: error generating code for message %v", m.Meta.MsgName)
+			return
+		}
+	}
+
+	return nil
+}
+
+func formatTemplate(tmpl *template.Template, out io.Writer, data interface{}) (err error) {
 	// Sadly need to buffer in memory because go/format doesn't want an io.Reader
 	buf := new(bytes.Buffer)
 	writer := bufio.NewWriter(buf)
 
-	err = tmpl.Execute(writer, p)
+	err = tmpl.Execute(writer, data)
 	if err != nil {
-		return err
+		return
 	}
 	writer.Flush()
 
 	fmtd, err := format.Source(buf.Bytes())
 	if err != nil {
-		return errors.Wrap(err, "generated code had invalid syntax")
+		log.Debugf("%+v", buf.String())
+		err = errors.Wrap(err, "codegen: generated code had invalid syntax")
+		return
 	}
 
-	_, err = w.Write(fmtd)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	_, err = out.Write(fmtd)
+	return
 }
 
 func readProtocol(doc *etree.Document, p *Protocol) error {
@@ -125,7 +146,7 @@ func readMessages(doc *etree.Document, p *Protocol) error {
 	}
 
 	// Skip first record which is protocol info
-	for _, record := range records[1:] {
+	for n, record := range records[1:] {
 		fields := record.FindElements("*")
 		if fields == nil {
 			return ErrorInvalidRecord
@@ -134,32 +155,38 @@ func readMessages(doc *etree.Document, p *Protocol) error {
 		var msg Message
 
 		for _, field := range fields {
+			txt := field.Text()
+
 			switch field.Tag {
 			case "_MsgOrder":
-				msg.Meta.MsgOrder = field.Text()
+				msg.Meta.MsgOrder = txt
 			case "_MsgName":
-				msg.Meta.MsgName = field.Text()
+				msg.Meta.MsgName = txt
 			case "_MsgDescription":
-				msg.Meta.MsgDescription = field.Text()
+				msg.Meta.MsgDescription = txt
 			case "_MsgHandler":
-				txt := field.Text()
-
-				// HACK: Use the handler name as the message type because it's already PascalCased for us
+				// Use the handler name as the message type because it's already PascalCased for us
 				msg.Type = strings.ReplaceAll(txt[4:], "_", "")
 				msg.Meta.MsgHandler = txt
 			case "_MsgAccessLvl":
-				msg.Meta.MsgAccessLvl = field.Text()
+				msg.Meta.MsgAccessLvl = txt
 			default:
 				attr := field.SelectAttr("TYPE")
 				if attr == nil {
-					return ErrorInvalidMessage
+					log.Debugf("Field %v had no TYPE attribute", field.Tag)
+					continue
 				}
 				field := Field{
-					Name:  field.Tag,
+					Name:  strings.Title(field.Tag),
 					Value: dmlToGoType(attr.Value),
 				}
 				msg.Fields = append(msg.Fields, field)
 			}
+		}
+
+		// Default to using the index of the message as the MsgOrder if unspecified
+		if msg.Meta.MsgOrder == "" {
+			msg.Meta.MsgOrder = fmt.Sprint(n + 1)
 		}
 
 		p.Messages = append(p.Messages, msg)
@@ -224,6 +251,7 @@ func dmlToGoType(typ string) string {
 	case "GID":
 		return "uint64"
 	default:
+		// TODO: Don't panic!
 		panic(fmt.Sprintf("unknown DML type %v", typ))
 	}
 }

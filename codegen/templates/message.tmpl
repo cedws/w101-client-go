@@ -1,0 +1,13 @@
+/*
+	MsgOrder:       {{ .Meta.MsgOrder }}
+	MsgName:        {{ .Meta.MsgName }}
+	MsgDescription: {{ .Meta.MsgDescription }}
+	MsgHandler:     {{ .Meta.MsgHandler }}
+	MsgAccessLvl:   {{ .Meta.MsgAccessLvl }}
+*/
+type {{ .Type }} struct {
+	{{ range $f := .Fields }}
+	{{ $f.Name }} {{ $f.Value -}}
+	{{ end }}
+}
+

@@ -46,6 +46,10 @@ func init() {
 }
 
 func Execute() {
+	log.SetFormatter(&log.TextFormatter{
+		DisableQuote: true,
+	})
+
 	if err := rootCmd.Execute(); err != nil {
 		log.Fatal(err)
 	}
