@@ -1,4 +1,4 @@
-module go-dml-codegen
+module github.com/umbra-project/go-dml-codegen
 
 go 1.16
 

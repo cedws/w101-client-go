@@ -1,7 +1,7 @@
 package main
 
 import (
-	"go-dml-codegen/cmd"
+	"github.com/umbra-project/go-dml-codegen/cmd"
 )
 
 func main() {
