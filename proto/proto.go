@@ -51,19 +51,23 @@ type Client struct {
 	controlRW controlReadWriter
 	controlCh chan *Frame
 	messageCh chan *Frame
-	closeOnce sync.Once
 
 	sessionID uint16
 	connected bool
+
+	closeOnce sync.Once
 }
 
-func Dial(router *MessageRouter, remote string) (*Client, error) {
+func Dial(remote string, router *MessageRouter) (*Client, error) {
 	conn, err := net.Dial("tcp", remote)
 	if err != nil {
 		return nil, err
 	}
 
-	controlRW := controlReadWriter{frameReader{conn}, frameWriter{conn}}
+	controlRW := controlReadWriter{
+		frameReader{conn},
+		frameWriter{conn},
+	}
 
 	client := &Client{
 		router:    router,
@@ -97,12 +101,7 @@ func (c *Client) handleMessages() {
 			return
 		}
 
-		service, ok := c.router.serviceRoutes[dmlMessage.ServiceID]
-		if !ok {
-			return
-		}
-
-		handlers, ok := service[dmlMessage.OrderNumber]
+		handlers, ok := c.router.Handlers(dmlMessage.ServiceID, dmlMessage.OrderNumber)
 		if !ok {
 			return
 		}
@@ -166,16 +165,15 @@ func (c *Client) SessionID() uint16 {
 	return c.sessionID
 }
 
-func (c *Client) WriteMessage(service, order int, msg Message) error {
+func (c *Client) WriteMessage(service, order byte, msg Message) error {
 	msgBuf, err := msg.MarshalBinary()
 	if err != nil {
 		return err
 	}
 
-	// TODO: can service/order be byte?
 	dml := DMLMessage{
-		ServiceID:   byte(service),
-		OrderNumber: byte(order),
+		ServiceID:   service,
+		OrderNumber: order,
 		Packet:      msgBuf,
 	}
 
@@ -209,6 +207,18 @@ func NewMessageRouter() *MessageRouter {
 	return &MessageRouter{
 		serviceRoutes: make(serviceRouter),
 	}
+}
+
+func (r *MessageRouter) Handlers(service, order byte) ([]func(DMLMessage), bool) {
+	if _, ok := r.serviceRoutes[service]; !ok {
+		return nil, false
+	}
+
+	if _, ok := r.serviceRoutes[service][order]; !ok {
+		return nil, false
+	}
+
+	return r.serviceRoutes[service][order], true
 }
 
 func RegisterMessageHandler[T any](router *MessageRouter, service, order byte, handler func(T)) {
