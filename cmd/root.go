@@ -1,44 +1,46 @@
 package cmd
 
 import (
+	"os"
+
+	"github.com/cedws/go-dml-codegen/codegen"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	"github.com/kronos-project/go-dml-codegen/codegen"
-	"os"
 )
 
 var (
-	output  string
-	debug   bool
-	rootCmd = &cobra.Command{
-		Short: "Generate Go code from a DML service definition",
-		Args:  cobra.ExactArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
-			if debug {
-				log.SetLevel(log.DebugLevel)
-			}
+	output string
+	debug  bool
+)
 
-			var f *os.File
-			var err error
+var rootCmd = &cobra.Command{
+	Short: "Generate Go code from a DML service definition",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		if debug {
+			log.SetLevel(log.DebugLevel)
+		}
 
-			w := os.Stdout
+		var file *os.File
+		var err error
 
-			if output != "" {
-				f, err = os.Create(output)
-				if err != nil {
-					log.Fatal(err)
-				}
-				defer f.Close()
-				w = f
-			}
+		w := os.Stdout
 
-			err = codegen.Generate(w, args[0])
+		if output != "" {
+			file, err = os.Create(output)
 			if err != nil {
 				log.Fatal(err)
 			}
-		},
-	}
-)
+			defer file.Close()
+
+			w = file
+		}
+
+		if err := codegen.Generate(w, args[0]); err != nil {
+			log.Fatal(err)
+		}
+	},
+}
 
 func init() {
 	rootCmd.Flags().StringVarP(&output, "output", "o", "", "file to write output to")
