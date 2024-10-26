@@ -145,22 +145,6 @@ func (c *Client) handleSessionOffer(frame *Frame) {
 
 	c.connected = true
 	c.sessionID = offer.SessionID
-
-	x := LatestFileListV2{
-		Locale: "English",
-	}
-	xb, _ := x.MarshalBinary()
-
-	d := DMLMessage{
-		ServiceID:   8,
-		OrderNumber: 2,
-		Packet:      xb,
-	}
-	db, _ := d.MarshalBinary()
-
-	c.controlRW.Write(&Frame{
-		MessageData: db,
-	})
 }
 
 func (c *Client) read() {
