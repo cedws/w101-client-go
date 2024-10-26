@@ -36,7 +36,12 @@ var rootCmd = &cobra.Command{
 			w = file
 		}
 
-		if err := codegen.Generate(w, args[0]); err != nil {
+		protocol, err := codegen.ReadProtocol(args[0])
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		if err := codegen.Generate(w, protocol); err != nil {
 			log.Fatal(err)
 		}
 	},
