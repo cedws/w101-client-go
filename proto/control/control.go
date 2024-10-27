@@ -7,8 +7,10 @@ import (
 )
 
 const (
-	PktSessionOffer  byte = 0x0
-	PktSessionAccept byte = 0x5
+	PktSessionOffer        byte = 0x0
+	PktSessionKeepAlive    byte = 0x3
+	PktSessionKeepAliveRsp byte = 0x4
+	PktSessionAccept       byte = 0x5
 )
 
 type SessionOffer struct {
@@ -84,6 +86,65 @@ func (s *SessionOffer) UnmarshalBinary(data []byte) error {
 		s.Signature = msg[len(msg)-256:]
 	}
 
+	return nil
+}
+
+type ClientKeepAlive struct {
+	SessionID           uint16
+	TimeMillis          uint16
+	SessionDurationMins uint16
+}
+
+func (c *ClientKeepAlive) MarshalBinary() ([]byte, error) {
+	var buf bytes.Buffer
+
+	binary.Write(&buf, binary.LittleEndian, c.SessionID)
+	binary.Write(&buf, binary.LittleEndian, c.TimeMillis)
+	binary.Write(&buf, binary.LittleEndian, c.SessionDurationMins)
+
+	return buf.Bytes(), nil
+}
+
+func (c *ClientKeepAlive) UnmarshalBinary(data []byte) error {
+	buf := bytes.NewReader(data)
+
+	binary.Read(buf, binary.LittleEndian, &c.SessionID)
+	binary.Read(buf, binary.LittleEndian, &c.TimeMillis)
+	binary.Read(buf, binary.LittleEndian, &c.SessionDurationMins)
+
+	return nil
+}
+
+type ServerKeepAlive struct {
+	SessionID    uint16
+	UptimeMillis uint32
+}
+
+func (s *ServerKeepAlive) MarshalBinary() ([]byte, error) {
+	var buf bytes.Buffer
+
+	binary.Write(&buf, binary.LittleEndian, s.SessionID)
+	binary.Write(&buf, binary.LittleEndian, s.UptimeMillis)
+
+	return buf.Bytes(), nil
+}
+
+func (s *ServerKeepAlive) UnmarshalBinary(data []byte) error {
+	buf := bytes.NewReader(data)
+
+	binary.Read(buf, binary.LittleEndian, &s.SessionID)
+	binary.Read(buf, binary.LittleEndian, &s.UptimeMillis)
+
+	return nil
+}
+
+type KeepAliveRsp struct{}
+
+func (k *KeepAliveRsp) MarshalBinary() ([]byte, error) {
+	return []byte{}, nil
+}
+
+func (k *KeepAliveRsp) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
