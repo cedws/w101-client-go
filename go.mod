@@ -1,4 +1,4 @@
-module github.com/cedws/go-dml-codegen
+module github.com/cedws/w101-client-go
 
 go 1.23
 

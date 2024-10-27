@@ -8,7 +8,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/cedws/go-dml-codegen/proto/control"
+	"github.com/cedws/w101-client-go/proto/control"
 )
 
 type Message interface {

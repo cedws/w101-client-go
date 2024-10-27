@@ -3,7 +3,7 @@ package cmd
 import (
 	"os"
 
-	"github.com/cedws/go-dml-codegen/codegen"
+	"github.com/cedws/w101-client-go/codegen"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
