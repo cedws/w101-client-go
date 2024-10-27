@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/cedws/w101-client-go/proto/control"
 )
+
+const heartbeatInterval = 10 * time.Second
 
 type Message interface {
 	encoding.BinaryMarshaler
@@ -23,13 +26,18 @@ type DMLMessage struct {
 }
 
 func (d *DMLMessage) UnmarshalBinary(data []byte) error {
-	if len(data) < 2 {
+	if len(data) < 4 {
 		return fmt.Errorf("invalid dml message")
 	}
 
 	d.ServiceID = data[0]
 	d.OrderNumber = data[1]
-	d.Packet = data[4:]
+
+	dataLen := binary.LittleEndian.Uint16(data[2:4]) + 1
+	if dataLen > uint16(len(data)) {
+		return fmt.Errorf("invalid dml message")
+	}
+	d.Packet = data[4:dataLen]
 
 	return nil
 }
@@ -39,7 +47,9 @@ func (d DMLMessage) MarshalBinary() ([]byte, error) {
 		d.ServiceID,
 		d.OrderNumber,
 	}
-	buf = binary.LittleEndian.AppendUint16(buf, uint16(len(buf)+len(d.Packet)+2))
+
+	dataLen := len(buf) + len(d.Packet) + 2
+	buf = binary.LittleEndian.AppendUint16(buf, uint16(dataLen))
 	buf = append(buf, d.Packet...)
 
 	return buf, nil
@@ -56,6 +66,8 @@ type Client struct {
 	sessionID         uint16
 	sessionTimeSecs   uint32
 	sessionTimeMillis uint32
+	sessionStart      time.Time
+	sessionHeartbeat  *time.Ticker
 	connected         bool
 
 	closeOnce sync.Once
@@ -73,17 +85,21 @@ func Dial(ctx context.Context, remote string, router *MessageRouter) (*Client, e
 	}
 
 	client := &Client{
-		router:    router,
+		router: router,
+
 		conn:      conn,
 		controlRW: controlRW,
 		controlCh: make(chan *Frame),
 		messageCh: make(chan *Frame),
+
+		sessionHeartbeat: time.NewTicker(heartbeatInterval),
 	}
 
 	go client.read()
 
 	if err := client.handshake(ctx); err != nil {
-		return nil, err
+		client.Close()
+		return nil, fmt.Errorf("session handshake failed: %w", err)
 	}
 
 	go client.handleControl()
@@ -98,9 +114,32 @@ func (c *Client) handshake(ctx context.Context) error {
 		case frame := <-c.controlCh:
 			c.handleControlFrame(frame)
 			if c.connected {
+				go c.heartbeat()
 				return nil
 			}
 		case <-ctx.Done():
+		}
+	}
+}
+
+func (c *Client) heartbeat() {
+	for range c.sessionHeartbeat.C {
+		keepAlive := &control.ClientKeepAlive{
+			SessionID:           c.sessionID,
+			TimeMillis:          uint16(time.Now().Nanosecond() / 1_000_000),
+			SessionDurationMins: uint16(time.Since(c.sessionStart).Minutes()),
+		}
+
+		keepAliveBuf, _ := keepAlive.MarshalBinary()
+
+		frame := &Frame{
+			Control:     true,
+			Opcode:      control.PktSessionKeepAlive,
+			MessageData: keepAliveBuf,
+		}
+
+		if err := c.controlRW.Write(frame); err != nil {
+			return
 		}
 	}
 }
@@ -113,8 +152,12 @@ func (c *Client) handleControl() {
 
 func (c *Client) handleControlFrame(frame *Frame) {
 	switch frame.Opcode {
+	case control.PktSessionKeepAlive:
+		c.handleSessionKeepAlive(frame)
 	case control.PktSessionOffer:
 		c.handleSessionOffer(frame)
+	case control.PktSessionAccept:
+		// ignore
 	}
 }
 
@@ -132,16 +175,28 @@ func (c *Client) handleMessages() {
 		}
 
 		for _, handler := range handlers {
-			handler(dmlMessage)
+			if err := handler(dmlMessage); err != nil {
+				c.Close()
+			}
 		}
 	}
 }
 
-func (c *Client) handleSessionOffer(frame *Frame) {
-	if c.connected {
-		return
+func (c *Client) handleSessionKeepAlive(_ *Frame) {
+	keepAliveRspBuf, _ := (&control.KeepAliveRsp{}).MarshalBinary()
+
+	resp := &Frame{
+		Control:     true,
+		Opcode:      control.PktSessionKeepAliveRsp,
+		MessageData: keepAliveRspBuf,
 	}
 
+	if err := c.controlRW.Write(resp); err != nil {
+		return
+	}
+}
+
+func (c *Client) handleSessionOffer(frame *Frame) {
 	offer := &control.SessionOffer{}
 	if err := offer.UnmarshalBinary(frame.MessageData); err != nil {
 		return
@@ -152,10 +207,7 @@ func (c *Client) handleSessionOffer(frame *Frame) {
 		TimeMillis: offer.TimeMillis,
 		SessionID:  offer.SessionID,
 	}
-	acceptBuf, err := accept.MarshalBinary()
-	if err != nil {
-		return
-	}
+	acceptBuf, _ := accept.MarshalBinary()
 
 	resp := &Frame{
 		Control:     true,
@@ -171,6 +223,7 @@ func (c *Client) handleSessionOffer(frame *Frame) {
 	c.sessionID = offer.SessionID
 	c.sessionTimeSecs = offer.TimeSecs
 	c.sessionTimeMillis = offer.TimeMillis
+	c.sessionStart = time.Now()
 }
 
 func (c *Client) read() {
@@ -201,10 +254,7 @@ func (c *Client) SessionTimeMillis() uint32 {
 }
 
 func (c *Client) WriteMessage(service, order byte, msg Message) error {
-	msgBuf, err := msg.MarshalBinary()
-	if err != nil {
-		return err
-	}
+	msgBuf, _ := msg.MarshalBinary()
 
 	dml := DMLMessage{
 		ServiceID:   service,
@@ -212,10 +262,7 @@ func (c *Client) WriteMessage(service, order byte, msg Message) error {
 		Packet:      msgBuf,
 	}
 
-	buf, err := dml.MarshalBinary()
-	if err != nil {
-		return err
-	}
+	buf, _ := dml.MarshalBinary()
 
 	return c.controlRW.Write(&Frame{
 		MessageData: buf,
@@ -224,13 +271,14 @@ func (c *Client) WriteMessage(service, order byte, msg Message) error {
 
 func (c *Client) Close() error {
 	c.closeOnce.Do(func() {
+		c.sessionHeartbeat.Stop()
 		close(c.controlCh)
 		close(c.messageCh)
 	})
 	return c.conn.Close()
 }
 
-type messageRouter map[byte][]func(DMLMessage)
+type messageRouter map[byte][]func(DMLMessage) error
 
 type serviceRouter map[byte]messageRouter
 
@@ -244,7 +292,7 @@ func NewMessageRouter() *MessageRouter {
 	}
 }
 
-func (r *MessageRouter) Handlers(service, order byte) ([]func(DMLMessage), bool) {
+func (r *MessageRouter) Handlers(service, order byte) ([]func(DMLMessage) error, bool) {
 	if _, ok := r.serviceRoutes[service]; !ok {
 		return nil, false
 	}
@@ -262,18 +310,25 @@ func RegisterMessageHandler[T any](router *MessageRouter, service, order byte, h
 	}
 
 	if _, ok := router.serviceRoutes[service][order]; !ok {
-		router.serviceRoutes[service][order] = make([]func(DMLMessage), 0)
+		router.serviceRoutes[service][order] = make([]func(DMLMessage) error, 0)
 	}
 
-	decodeFunc := func(d DMLMessage) {
+	decodeFunc := func(d DMLMessage) error {
 		var msg T
 
 		// This sucks
-		if err := any(&msg).(encoding.BinaryUnmarshaler).UnmarshalBinary(d.Packet); err != nil {
-			// TODO
+		dec, ok := any(&msg).(encoding.BinaryUnmarshaler)
+		if !ok {
+			panic("message type does not implement encoding.BinaryUnmarshaler")
+		}
+
+		if err := dec.UnmarshalBinary(d.Packet); err != nil {
+			return err
 		}
 
 		handler(msg)
+
+		return nil
 	}
 
 	router.serviceRoutes[service][order] = append(router.serviceRoutes[service][order], decodeFunc)
