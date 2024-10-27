@@ -81,6 +81,7 @@ func Generate(w io.Writer, pr Protocol) error {
 	p(&b, `"`, "github.com/cedws/go-dml-codegen/proto", `"`)
 	p(&b, `"bytes"`)
 	p(&b, `"encoding/binary"`)
+	p(&b, `"unsafe"`)
 	p(&b, ")")
 
 	p(&b, "type ", unexport(pr.Service), "Service interface {")
@@ -128,6 +129,7 @@ func Generate(w io.Writer, pr Protocol) error {
 	}
 
 	writeMessages(&b, pr)
+	writeFuncs(&b)
 
 	if err := reformat(&b, w); err != nil {
 		return err
@@ -174,17 +176,10 @@ func generateMarshalBinary(b io.Writer, msg Message) {
 	p(b, "func (s *", msg.Type, ") MarshalBinary() ([]byte, error) {")
 	p(b, "var b bytes.Buffer")
 
-	if generateStringFunc(msg.Fields) {
-		p(b, "writeString := func(v string) {")
-		p(b, "binary.Write(&b, binary.LittleEndian, uint16(len(v)))")
-		p(b, "b.WriteString(v)")
-		p(b, "}")
-	}
-
 	for _, field := range msg.Fields {
 		switch field.Type {
 		case "string":
-			p(b, "writeString(s.", field.Name, ")")
+			p(b, "writeString(&b, s.", field.Name, ")")
 		default:
 			p(b, "binary.Write(&b, binary.LittleEndian, s.", field.Name, ")")
 		}
@@ -208,24 +203,10 @@ func generateUnmarshalBinary(b io.Writer, msg Message) {
 	p(b, "b := bytes.NewReader(data)")
 	p(b, "var err error")
 
-	if generateStringFunc(msg.Fields) {
-		p(b, "readString := func() (string, error) {")
-		p(b, "var length uint16")
-		p(b, "if err := binary.Read(b, binary.LittleEndian, &length); err != nil {")
-		p(b, `return "", err`)
-		p(b, "}")
-		p(b, "data := make([]byte, length)")
-		p(b, "if _, err := b.Read(data); err != nil {")
-		p(b, `return "", err`)
-		p(b, "}")
-		p(b, "return string(data), nil")
-		p(b, "}")
-	}
-
 	for _, field := range msg.Fields {
 		switch field.Type {
 		case "string":
-			p(b, "if s.", field.Name, ", err = readString(); err != nil {")
+			p(b, "if s.", field.Name, ", err = readString(b); err != nil {")
 			p(b, "return err")
 			p(b, "}")
 		default:
@@ -239,14 +220,23 @@ func generateUnmarshalBinary(b io.Writer, msg Message) {
 	p(b, "}")
 }
 
-func generateStringFunc(fields []Field) bool {
-	for _, field := range fields {
-		if field.Type == "string" {
-			return true
-		}
-	}
+func writeFuncs(b io.Writer) {
+	p(b, "func writeString(b *bytes.Buffer, v string) {")
+	p(b, "binary.Write(b, binary.LittleEndian, uint16(len(v)))")
+	p(b, "b.WriteString(v)")
+	p(b, "}")
 
-	return false
+	p(b, "func readString(buf *bytes.Reader) (string, error) {")
+	p(b, "var length uint16")
+	p(b, "if err := binary.Read(buf, binary.LittleEndian, &length); err != nil {")
+	p(b, "return ``, err")
+	p(b, "}")
+	p(b, "data := make([]byte, length)")
+	p(b, "if _, err := buf.Read(data); err != nil {")
+	p(b, "return ``, err")
+	p(b, "}")
+	p(b, "return *(*string)(unsafe.Pointer(&data)), nil")
+	p(b, "}")
 }
 
 func readProtocol(doc *etree.Document, p *Protocol) error {
