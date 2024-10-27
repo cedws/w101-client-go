@@ -90,12 +90,6 @@ func Generate(w io.Writer, pr Protocol) error {
 	}
 	p(&b, "}")
 
-	p(&b, "type ", unexport(pr.Service), "Client interface {")
-	for _, msg := range pr.Messages {
-		p(&b, msg.Type, "(", msg.Type, ") error")
-	}
-	p(&b, "}")
-
 	p(&b)
 
 	p(&b, "type ", pr.Service, "Service struct {")
