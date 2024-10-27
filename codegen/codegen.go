@@ -129,7 +129,7 @@ func Generate(w io.Writer, pr Protocol) error {
 	}
 
 	writeMessages(&b, pr)
-	writeFuncs(&b)
+	writeFuncs(&b, pr)
 
 	if err := reformat(&b, w); err != nil {
 		return err
@@ -167,19 +167,19 @@ func writeMessages(b io.Writer, pr Protocol) {
 		}
 		p(b, "}")
 
-		generateMarshalBinary(b, msg)
-		generateUnmarshalBinary(b, msg)
+		generateMarshalBinary(b, pr, msg)
+		generateUnmarshalBinary(b, pr, msg)
 	}
 }
 
-func generateMarshalBinary(b io.Writer, msg Message) {
+func generateMarshalBinary(b io.Writer, pr Protocol, msg Message) {
 	p(b, "func (s *", msg.Type, ") MarshalBinary() ([]byte, error) {")
 	p(b, "var b bytes.Buffer")
 
 	for _, field := range msg.Fields {
 		switch field.Type {
 		case "string":
-			p(b, "writeString(&b, s.", field.Name, ")")
+			p(b, "writeString_", pr.Meta.ServiceID, "(&b, s.", field.Name, ")")
 		default:
 			p(b, "binary.Write(&b, binary.LittleEndian, s.", field.Name, ")")
 		}
@@ -190,7 +190,7 @@ func generateMarshalBinary(b io.Writer, msg Message) {
 	p(b, "}")
 }
 
-func generateUnmarshalBinary(b io.Writer, msg Message) {
+func generateUnmarshalBinary(b io.Writer, pr Protocol, msg Message) {
 	p(b, "func (s *", msg.Type, ") UnmarshalBinary(data []byte) error {")
 
 	if len(msg.Fields) == 0 {
@@ -206,7 +206,7 @@ func generateUnmarshalBinary(b io.Writer, msg Message) {
 	for _, field := range msg.Fields {
 		switch field.Type {
 		case "string":
-			p(b, "if s.", field.Name, ", err = readString(b); err != nil {")
+			p(b, "if s.", field.Name, ", err = readString_", pr.Meta.ServiceID, "(b); err != nil {")
 			p(b, "return err")
 			p(b, "}")
 		default:
@@ -220,13 +220,16 @@ func generateUnmarshalBinary(b io.Writer, msg Message) {
 	p(b, "}")
 }
 
-func writeFuncs(b io.Writer) {
-	p(b, "func writeString(b *bytes.Buffer, v string) {")
+func writeFuncs(b io.Writer, pr Protocol) {
+	// funcs are prefixed with service ID to avoid conflicts when multiple files are generated
+	// within the same go package
+
+	p(b, "func writeString_", pr.Meta.ServiceID, "(b *bytes.Buffer, v string) {")
 	p(b, "binary.Write(b, binary.LittleEndian, uint16(len(v)))")
 	p(b, "b.WriteString(v)")
 	p(b, "}")
 
-	p(b, "func readString(buf *bytes.Reader) (string, error) {")
+	p(b, "func readString_", pr.Meta.ServiceID, "(buf *bytes.Reader) (string, error) {")
 	p(b, "var length uint16")
 	p(b, "if err := binary.Read(buf, binary.LittleEndian, &length); err != nil {")
 	p(b, "return ``, err")
