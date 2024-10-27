@@ -1,6 +1,7 @@
 package proto
 
 import (
+	"context"
 	"encoding"
 	"encoding/binary"
 	"fmt"
@@ -52,13 +53,15 @@ type Client struct {
 	controlCh chan *Frame
 	messageCh chan *Frame
 
-	sessionID uint16
-	connected bool
+	sessionID         uint16
+	sessionTimeSecs   uint32
+	sessionTimeMillis uint32
+	connected         bool
 
 	closeOnce sync.Once
 }
 
-func Dial(remote string, router *MessageRouter) (*Client, error) {
+func Dial(ctx context.Context, remote string, router *MessageRouter) (*Client, error) {
 	conn, err := net.Dial("tcp", remote)
 	if err != nil {
 		return nil, err
@@ -77,19 +80,41 @@ func Dial(remote string, router *MessageRouter) (*Client, error) {
 		messageCh: make(chan *Frame),
 	}
 
+	go client.read()
+
+	if err := client.handshake(ctx); err != nil {
+		return nil, err
+	}
+
 	go client.handleControl()
 	go client.handleMessages()
-	go client.read()
 
 	return client, nil
 }
 
+func (c *Client) handshake(ctx context.Context) error {
+	for {
+		select {
+		case frame := <-c.controlCh:
+			c.handleControlFrame(frame)
+			if c.connected {
+				return nil
+			}
+		case <-ctx.Done():
+		}
+	}
+}
+
 func (c *Client) handleControl() {
 	for frame := range c.controlCh {
-		switch frame.Opcode {
-		case control.PktSessionOffer:
-			c.handleSessionOffer(frame)
-		}
+		c.handleControlFrame(frame)
+	}
+}
+
+func (c *Client) handleControlFrame(frame *Frame) {
+	switch frame.Opcode {
+	case control.PktSessionOffer:
+		c.handleSessionOffer(frame)
 	}
 }
 
@@ -144,6 +169,8 @@ func (c *Client) handleSessionOffer(frame *Frame) {
 
 	c.connected = true
 	c.sessionID = offer.SessionID
+	c.sessionTimeSecs = offer.TimeSecs
+	c.sessionTimeMillis = offer.TimeMillis
 }
 
 func (c *Client) read() {
@@ -163,6 +190,14 @@ func (c *Client) read() {
 
 func (c *Client) SessionID() uint16 {
 	return c.sessionID
+}
+
+func (c *Client) SessionTimeSecs() uint32 {
+	return c.sessionTimeSecs
+}
+
+func (c *Client) SessionTimeMillis() uint32 {
+	return c.sessionTimeMillis
 }
 
 func (c *Client) WriteMessage(service, order byte, msg Message) error {
