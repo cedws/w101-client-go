@@ -96,6 +96,8 @@ func Generate(w io.Writer, pr Protocol) error {
 	p(&b, unexport(pr.Service), "Service")
 	p(&b, "}")
 
+	p(&b)
+
 	p(&b, "type ", pr.Service, "Client struct {")
 	p(&b, "c *proto.Client")
 	p(&b, "}")
@@ -112,17 +114,21 @@ func Generate(w io.Writer, pr Protocol) error {
 	}
 	p(&b, "}")
 
+	p(&b)
+
 	p(&b, "func New", pr.Service, "Client(c *proto.Client) ", pr.Service, "Client {")
 	p(&b, "return ", pr.Service, "Client{c}")
 	p(&b, "}")
 
 	for _, msg := range pr.Messages {
+		p(&b)
 		p(&b, "func (c ", pr.Service, "Client) ", msg.Type, "(m *", msg.Type, ") error {")
 		p(&b, "return c.c.WriteMessage(", pr.Meta.ServiceID, ",", msg.Meta.MsgOrder, ", m)")
 		p(&b, "}")
 	}
 
 	writeMessages(&b, pr)
+	p(&b)
 	writeFuncs(&b, pr)
 
 	if err := reformat(&b, w); err != nil {
@@ -162,6 +168,7 @@ func writeMessages(b io.Writer, pr Protocol) {
 		p(b, "}")
 
 		generateMarshalBinary(b, pr, msg)
+		p(b)
 		generateUnmarshalBinary(b, pr, msg)
 	}
 }
@@ -222,6 +229,8 @@ func writeFuncs(b io.Writer, pr Protocol) {
 	p(b, "binary.Write(b, binary.LittleEndian, uint16(len(v)))")
 	p(b, "b.WriteString(v)")
 	p(b, "}")
+
+	p(b)
 
 	p(b, "func readString_", pr.Meta.ServiceID, "(buf *bytes.Reader) (string, error) {")
 	p(b, "var length uint16")
