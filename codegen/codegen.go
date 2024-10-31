@@ -14,6 +14,37 @@ import (
 	"golang.org/x/text/language"
 )
 
+type DMLType string
+
+const (
+	dmlByt   DMLType = "BYT"
+	dmlUbyt  DMLType = "UBYT"
+	dmlShrt  DMLType = "SHRT"
+	dmlUshrt DMLType = "USHRT"
+	dmlInt   DMLType = "INT"
+	dmlUint  DMLType = "UINT"
+	dmlStr   DMLType = "STR"
+	dmlWstr  DMLType = "WSTR"
+	dmlFlt   DMLType = "FLT"
+	dmlDbl   DMLType = "DBL"
+	dmlGid   DMLType = "GID"
+)
+
+type goType string
+
+const (
+	goInt8    goType = "int8"
+	goUint8   goType = "uint8"
+	goInt16   goType = "int16"
+	goUint16  goType = "uint16"
+	goInt32   goType = "int32"
+	goUint32  goType = "uint32"
+	goString  goType = "string"
+	goFloat32 goType = "float32"
+	goFloat64 goType = "float64"
+	goUint64  goType = "uint64"
+)
+
 var (
 	ErrMissingProtocolInfo = errors.New("codegen: failed to locate protocol info")
 	ErrMissingRecords      = errors.New("codegen: failed to locate records")
@@ -29,7 +60,7 @@ var (
 
 type Field struct {
 	Name string
-	Type string
+	Type DMLType
 }
 
 type Message struct {
@@ -60,6 +91,21 @@ func ReadProtocol(file string) (Protocol, error) {
 	doc := etree.NewDocument()
 
 	if err := doc.ReadFromFile(file); err != nil {
+		return Protocol{}, err
+	}
+
+	var pr Protocol
+	if err := readProtocol(doc, &pr); err != nil {
+		return Protocol{}, err
+	}
+
+	return pr, nil
+}
+
+func UnmarshalProtocol(data []byte) (Protocol, error) {
+	doc := etree.NewDocument()
+
+	if err := doc.ReadFromBytes(data); err != nil {
 		return Protocol{}, err
 	}
 
@@ -145,6 +191,10 @@ func unexport(s string) string {
 	return strings.ToLower(s[:1]) + s[1:]
 }
 
+func pf(w io.Writer, args ...string) {
+	fmt.Fprintf(w, strings.Join(args, ""))
+}
+
 func p(w io.Writer, args ...string) {
 	fmt.Fprintln(w, strings.Join(args, ""))
 }
@@ -159,11 +209,51 @@ func reformat(in *bytes.Buffer, out io.Writer) error {
 	return err
 }
 
+func msgBaseSize(msg Message) (size int) {
+	for _, field := range msg.Fields {
+		switch DMLType(field.Type) {
+		case dmlByt:
+			size += 1
+		case dmlUbyt:
+			size += 1
+		case dmlShrt:
+			size += 2
+		case dmlUshrt:
+			size += 2
+		case dmlInt:
+			size += 4
+		case dmlUint:
+			size += 4
+		case dmlStr:
+			// variable length, add 2 bytes for length prefix
+			size += 2
+		case dmlWstr:
+			// variable length, add 2 bytes for length prefix
+			size += 2
+		case dmlFlt:
+			size += 4
+		case dmlDbl:
+			size += 8
+		case dmlGid:
+			size += 8
+		default:
+			panic(fmt.Sprintf("codegen: unknown field type %v", field.Type))
+		}
+	}
+
+	return
+}
+
 func writeMessages(b io.Writer, pr Protocol) {
 	for _, msg := range pr.Messages {
 		p(b, "type ", msg.Type, " struct {")
 		for _, field := range msg.Fields {
-			p(b, field.Name, " ", field.Type)
+			goType, ok := dmlToGoType(field.Type)
+			if !ok {
+				panic(fmt.Sprintf("codegen: unknown field type %v", field.Type))
+			}
+
+			p(b, field.Name, " ", string(goType))
 		}
 		p(b, "}")
 
@@ -175,14 +265,31 @@ func writeMessages(b io.Writer, pr Protocol) {
 
 func generateMarshalBinary(b io.Writer, pr Protocol, msg Message) {
 	p(b, "func (s *", msg.Type, ") MarshalBinary() ([]byte, error) {")
-	p(b, "var b bytes.Buffer")
+
+	if len(msg.Fields) == 0 {
+		p(b, "return []byte{}, nil")
+		p(b, "}")
+
+		return
+	}
+
+	baseSize := msgBaseSize(msg)
+
+	pf(b, "b := bytes.NewBuffer(make([]byte, 0, ", fmt.Sprint(baseSize))
+	for _, field := range msg.Fields {
+		switch field.Type {
+		case dmlStr, dmlWstr:
+			pf(b, "+len(s.", field.Name, ")")
+		}
+	}
+	p(b, "))")
 
 	for _, field := range msg.Fields {
 		switch field.Type {
-		case "string":
-			p(b, "writeString_", pr.Meta.ServiceID, "(&b, s.", field.Name, ")")
+		case dmlStr, dmlWstr:
+			p(b, "writeString_", pr.Meta.ServiceID, "(b, s.", field.Name, ")")
 		default:
-			p(b, "binary.Write(&b, binary.LittleEndian, s.", field.Name, ")")
+			p(b, "binary.Write(b, binary.LittleEndian, s.", field.Name, ")")
 		}
 
 	}
@@ -206,7 +313,7 @@ func generateUnmarshalBinary(b io.Writer, pr Protocol, msg Message) {
 
 	for _, field := range msg.Fields {
 		switch field.Type {
-		case "string":
+		case dmlStr, dmlWstr:
 			p(b, "if s.", field.Name, ", err = readString_", pr.Meta.ServiceID, "(b); err != nil {")
 			p(b, "return err")
 			p(b, "}")
@@ -235,11 +342,11 @@ func writeFuncs(b io.Writer, pr Protocol) {
 	p(b, "func readString_", pr.Meta.ServiceID, "(buf *bytes.Reader) (string, error) {")
 	p(b, "var length uint16")
 	p(b, "if err := binary.Read(buf, binary.LittleEndian, &length); err != nil {")
-	p(b, "return ``, err")
+	p(b, `return "", err`)
 	p(b, "}")
 	p(b, "data := make([]byte, length)")
 	p(b, "if _, err := buf.Read(data); err != nil {")
-	p(b, "return ``, err")
+	p(b, `return "", err`)
 	p(b, "}")
 	p(b, "return *(*string)(unsafe.Pointer(&data)), nil")
 	p(b, "}")
@@ -303,9 +410,14 @@ func readMessages(doc *etree.Document, p *Protocol) error {
 					continue
 				}
 
+				dmlType, ok := parseDMLType(attr.Value)
+				if !ok {
+					return ErrInvalidMessage
+				}
+
 				field := Field{
 					Name: noLowerCaser.String(field.Tag),
-					Type: dmlToGoType(attr.Value),
+					Type: dmlType,
 				}
 
 				msg.Fields = append(msg.Fields, field)
@@ -353,33 +465,41 @@ func readProtocolInfo(doc *etree.Document, p *Protocol) error {
 	return nil
 }
 
-func dmlToGoType(typ string) string {
-	switch typ {
-	case "BYT":
-		return "int8"
-	case "UBYT":
-		return "uint8"
-	case "SHRT":
-		return "int16"
-	case "USHRT":
-		return "uint16"
-	case "INT":
-		return "int32"
-	case "UINT":
-		return "uint32"
-	case "STR":
-		return "string"
-	case "WSTR":
-		// TODO: Think about this
-		return "string"
-	case "FLT":
-		return "float32"
-	case "DBL":
-		return "float64"
-	case "GID":
-		return "uint64"
+func parseDMLType(dmlType string) (DMLType, bool) {
+	switch dmlType {
+	case "BYT", "UBYT", "SHRT", "USHRT", "INT", "UINT", "STR", "WSTR", "FLT", "DBL", "GID":
+		return DMLType(dmlType), true
 	default:
-		// TODO: Don't panic!
-		panic(fmt.Sprintf("unknown DML type %v", typ))
+		return "", false
+	}
+}
+
+func dmlToGoType(typ DMLType) (goType, bool) {
+	switch typ {
+	case dmlByt:
+		return goInt8, true
+	case dmlUbyt:
+		return goUint8, true
+	case dmlShrt:
+		return goInt16, true
+	case dmlUshrt:
+		return goUint16, true
+	case dmlInt:
+		return goInt32, true
+	case dmlUint:
+		return goUint32, true
+	case dmlStr:
+		return goString, true
+	case dmlWstr:
+		// TODO: Think about this
+		return goString, true
+	case dmlFlt:
+		return goFloat32, true
+	case dmlDbl:
+		return goFloat64, true
+	case dmlGid:
+		return goUint64, true
+	default:
+		return "", false
 	}
 }
