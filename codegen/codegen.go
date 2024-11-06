@@ -76,8 +76,8 @@ var (
 )
 
 var (
-	lowerCaser   = cases.Title(language.English)
-	noLowerCaser = cases.Title(language.English, cases.NoLower)
+	titleCaser        = cases.Title(language.English)
+	titleCaserNoLower = cases.Title(language.English, cases.NoLower)
 )
 
 type Field struct {
@@ -387,6 +387,10 @@ func readProtocol(doc *etree.Document, p *Protocol) error {
 	return nil
 }
 
+func compareMessageByName(a, b Message) int {
+	return strings.Compare(a.Meta.MsgName, b.Meta.MsgName)
+}
+
 func readMessages(doc *etree.Document, p *Protocol) error {
 	records := doc.FindElements("//RECORD")
 	if records == nil {
@@ -398,7 +402,7 @@ func readMessages(doc *etree.Document, p *Protocol) error {
 	}
 
 	// Skip first record which is protocol info
-	for n, record := range records[1:] {
+	for _, record := range records[1:] {
 		fields := record.FindElements("*")
 		if fields == nil {
 			return ErrInvalidRecord
@@ -434,7 +438,7 @@ func readMessages(doc *etree.Document, p *Protocol) error {
 				}
 
 				field := Field{
-					Name: noLowerCaser.String(field.Tag),
+					Name: titleCaserNoLower.String(field.Tag),
 					Type: dmlType,
 				}
 
@@ -442,12 +446,17 @@ func readMessages(doc *etree.Document, p *Protocol) error {
 			}
 		}
 
-		// Default to using the index of the message as the MsgOrder if unspecified
-		if msg.Meta.MsgOrder == "" {
-			msg.Meta.MsgOrder = fmt.Sprint(n + 1)
-		}
-
 		p.Messages = append(p.Messages, msg)
+	}
+
+	// Sort messages by name
+	slices.SortFunc(p.Messages, compareMessageByName)
+
+	for i, msg := range p.Messages {
+		// If no explicit MsgOrder, use the implicit order from the index of the sorted messages
+		if msg.Meta.MsgOrder == "" {
+			p.Messages[i].Meta.MsgOrder = fmt.Sprint(i + 1)
+		}
 	}
 
 	return nil
@@ -478,7 +487,7 @@ func readProtocolInfo(doc *etree.Document, p *Protocol) error {
 	p.Meta.Version = search["ProtocolVersion"]
 	p.Meta.Description = search["ProtocolDescription"]
 
-	p.Service = lowerCaser.String(p.Meta.Type)
+	p.Service = titleCaser.String(p.Meta.Type)
 
 	return nil
 }
