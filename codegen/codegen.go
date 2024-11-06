@@ -232,7 +232,7 @@ func reformat(in *bytes.Buffer, out io.Writer) error {
 
 func msgBaseSize(msg Message) (size int) {
 	for _, field := range msg.Fields {
-		switch DMLType(field.Type) {
+		switch field.Type {
 		case dmlByt:
 			size += 1
 		case dmlUbyt:
@@ -257,8 +257,10 @@ func msgBaseSize(msg Message) (size int) {
 			size += 8
 		case dmlGid:
 			size += 8
+		case dmlBool:
+			size += 1
 		default:
-			panic(fmt.Sprintf("codegen: unknown field type %v", field.Type))
+			panic(fmt.Sprintf("codegen: unhandled field type %v", field.Type))
 		}
 	}
 
