@@ -41,7 +41,12 @@ var rootCmd = &cobra.Command{
 			log.Fatal(err)
 		}
 
-		if err := codegen.Generate(w, protocol); err != nil {
+		packageName, ok := os.LookupEnv("GOPACKAGE")
+		if !ok {
+			log.Fatal("GOPACKAGE not set")
+		}
+
+		if err := codegen.Generate(w, packageName, protocol); err != nil {
 			log.Fatal(err)
 		}
 	},
