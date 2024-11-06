@@ -7,6 +7,7 @@ import (
 	"go/format"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/beevik/etree"
@@ -15,6 +16,26 @@ import (
 )
 
 type DMLType string
+
+var dmlTypes = []DMLType{
+	dmlByt, dmlUbyt, dmlShrt, dmlUshrt, dmlInt, dmlUint, dmlStr, dmlWstr,
+	dmlFlt, dmlDbl, dmlGid, dmlBool,
+}
+
+var dmlAsGoTypes = map[DMLType]goType{
+	dmlByt:   goInt8,
+	dmlUbyt:  goUint8,
+	dmlShrt:  goInt16,
+	dmlUshrt: goUint16,
+	dmlInt:   goInt32,
+	dmlUint:  goUint32,
+	dmlStr:   goString,
+	dmlWstr:  goString,
+	dmlFlt:   goFloat32,
+	dmlDbl:   goFloat64,
+	dmlGid:   goUint64,
+	dmlBool:  goBool,
+}
 
 const (
 	dmlByt   DMLType = "BYT"
@@ -28,6 +49,7 @@ const (
 	dmlFlt   DMLType = "FLT"
 	dmlDbl   DMLType = "DBL"
 	dmlGid   DMLType = "GID"
+	dmlBool  DMLType = "BOOL"
 )
 
 type goType string
@@ -43,6 +65,7 @@ const (
 	goFloat32 goType = "float32"
 	goFloat64 goType = "float64"
 	goUint64  goType = "uint64"
+	goBool    goType = "bool"
 )
 
 var (
@@ -248,7 +271,7 @@ func writeMessages(b io.Writer, pr Protocol) {
 	for _, msg := range pr.Messages {
 		p(b, "type ", msg.Type, " struct {")
 		for _, field := range msg.Fields {
-			goType, ok := dmlToGoType(field.Type)
+			goType, ok := dmlAsGoTypes[field.Type]
 			if !ok {
 				panic(fmt.Sprintf("codegen: unknown field type %v", field.Type))
 			}
@@ -412,7 +435,7 @@ func readMessages(doc *etree.Document, p *Protocol) error {
 
 				dmlType, ok := parseDMLType(attr.Value)
 				if !ok {
-					return ErrInvalidMessage
+					return fmt.Errorf("%w: invalid type %v", ErrInvalidMessage, attr.Value)
 				}
 
 				field := Field{
@@ -466,40 +489,9 @@ func readProtocolInfo(doc *etree.Document, p *Protocol) error {
 }
 
 func parseDMLType(dmlType string) (DMLType, bool) {
-	switch dmlType {
-	case "BYT", "UBYT", "SHRT", "USHRT", "INT", "UINT", "STR", "WSTR", "FLT", "DBL", "GID":
-		return DMLType(dmlType), true
-	default:
-		return "", false
+	if d := DMLType(dmlType); slices.Contains(dmlTypes, d) {
+		return d, true
 	}
-}
 
-func dmlToGoType(typ DMLType) (goType, bool) {
-	switch typ {
-	case dmlByt:
-		return goInt8, true
-	case dmlUbyt:
-		return goUint8, true
-	case dmlShrt:
-		return goInt16, true
-	case dmlUshrt:
-		return goUint16, true
-	case dmlInt:
-		return goInt32, true
-	case dmlUint:
-		return goUint32, true
-	case dmlStr:
-		return goString, true
-	case dmlWstr:
-		// TODO: Think about this
-		return goString, true
-	case dmlFlt:
-		return goFloat32, true
-	case dmlDbl:
-		return goFloat64, true
-	case dmlGid:
-		return goUint64, true
-	default:
-		return "", false
-	}
+	return "", false
 }
