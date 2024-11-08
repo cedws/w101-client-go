@@ -487,7 +487,11 @@ func readProtocolInfo(doc *etree.Document, p *Protocol) error {
 	p.Meta.Version = search["ProtocolVersion"]
 	p.Meta.Description = search["ProtocolDescription"]
 
-	p.Service = titleCaser.String(p.Meta.Type)
+	service := titleCaser.String(p.Meta.Type)
+	service = strings.TrimSuffix(service, "_messages")
+	service = strings.TrimSuffix(service, "messages")
+
+	p.Service = service
 
 	return nil
 }
