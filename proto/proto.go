@@ -118,6 +118,7 @@ func (c *Client) handshake(ctx context.Context) error {
 				return nil
 			}
 		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 }
