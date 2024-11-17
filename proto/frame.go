@@ -1,7 +1,6 @@
 package proto
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -92,25 +91,31 @@ func (r *frameReader) Read() (*Frame, error) {
 func (w *frameWriter) Write(frame *Frame) error {
 	rawFrame := frame.Marshal()
 
-	buf := bytes.NewBuffer(make([]byte, 0, 5+len(rawFrame)))
-
-	binary.Write(buf, binary.LittleEndian, headerMagic)
+	if err := binary.Write(w.writer, binary.LittleEndian, headerMagic); err != nil {
+		return err
+	}
 
 	if len(rawFrame) > 0x7FFF {
 		if len(rawFrame) > math.MaxUint32 {
 			return fmt.Errorf("frame too large, max size is %v but got %v", math.MaxUint32, len(rawFrame))
 		}
 
-		binary.Write(buf, binary.LittleEndian, uint16(0x8000))
-		binary.Write(buf, binary.LittleEndian, uint32(len(rawFrame)+1))
+		if err := binary.Write(w.writer, binary.LittleEndian, uint16(0x8000)); err != nil {
+			return err
+		}
+		if err := binary.Write(w.writer, binary.LittleEndian, uint32(len(rawFrame)+1)); err != nil {
+			return err
+		}
 	} else {
-		binary.Write(buf, binary.LittleEndian, uint16(len(rawFrame)+1))
+		if err := binary.Write(w.writer, binary.LittleEndian, uint16(len(rawFrame)+1)); err != nil {
+			return err
+		}
 	}
 
-	buf.Write(rawFrame)
-	buf.WriteByte(0)
-
-	if _, err := io.Copy(w.writer, buf); err != nil {
+	if _, err := w.writer.Write(rawFrame); err != nil {
+		return err
+	}
+	if _, err := w.writer.Write([]byte{0}); err != nil {
 		return err
 	}
 
