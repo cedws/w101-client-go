@@ -290,7 +290,7 @@ func generateMarshal(b io.Writer, pr Protocol, msg Message) {
 	p(b, "func (s *", msg.Type, ") Marshal() []byte {")
 
 	if len(msg.Fields) == 0 {
-		p(b, "return []byte{}, nil")
+		p(b, "return []byte{}")
 		p(b, "}")
 
 		return
