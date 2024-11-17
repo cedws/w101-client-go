@@ -58,7 +58,7 @@ func (s *SessionOffer) Unmarshal(data []byte) error {
 			return nil, err
 		}
 		msg := make([]byte, length)
-		if _, err := buf.Read(msg); err != nil {
+		if _, err := io.ReadFull(buf, msg); err != nil {
 			return nil, err
 		}
 		return msg, nil
@@ -190,7 +190,7 @@ func (s *SessionAccept) Unmarshal(data []byte) error {
 			return nil, err
 		}
 		msg := make([]byte, length)
-		if _, err := buf.Read(msg); err != nil {
+		if _, err := io.ReadFull(buf, msg); err != nil {
 			return nil, err
 		}
 		return msg, nil
