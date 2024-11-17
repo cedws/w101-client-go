@@ -29,7 +29,7 @@ type Frame struct {
 	MessageData []byte
 }
 
-func (f *Frame) UnmarshalBinary(data []byte) error {
+func (f *Frame) Unmarshal(data []byte) error {
 	if len(data) < 5 {
 		return fmt.Errorf("invalid frame, expected at least 5 bytes but got %v", len(data))
 	}
@@ -41,7 +41,7 @@ func (f *Frame) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-func (f *Frame) MarshalBinary() ([]byte, error) {
+func (f *Frame) Marshal() []byte {
 	buf := make([]byte, 4+len(f.MessageData))
 	if f.Control {
 		buf[0] = 0x1
@@ -49,7 +49,7 @@ func (f *Frame) MarshalBinary() ([]byte, error) {
 	buf[1] = f.Opcode
 	copy(buf[4:], f.MessageData)
 
-	return buf, nil
+	return buf
 }
 
 func (r *frameReader) Read() (*Frame, error) {
@@ -82,7 +82,7 @@ func (r *frameReader) Read() (*Frame, error) {
 	}
 
 	frame := &Frame{}
-	if err := frame.UnmarshalBinary(rawFrame); err != nil {
+	if err := frame.Unmarshal(rawFrame); err != nil {
 		return nil, err
 	}
 
@@ -90,10 +90,7 @@ func (r *frameReader) Read() (*Frame, error) {
 }
 
 func (w *frameWriter) Write(frame *Frame) error {
-	rawFrame, err := frame.MarshalBinary()
-	if err != nil {
-		return err
-	}
+	rawFrame := frame.Marshal()
 
 	buf := bytes.NewBuffer(make([]byte, 0, 5+len(rawFrame)))
 

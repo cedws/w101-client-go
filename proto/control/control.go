@@ -21,7 +21,7 @@ type SessionOffer struct {
 	Signature  []byte
 }
 
-func (s *SessionOffer) MarshalBinary() ([]byte, error) {
+func (s *SessionOffer) Marshal() []byte {
 	var buf bytes.Buffer
 
 	write := func(v any) {
@@ -42,10 +42,10 @@ func (s *SessionOffer) MarshalBinary() ([]byte, error) {
 	writeMessage()
 	buf.WriteByte(0)
 
-	return buf.Bytes(), nil
+	return buf.Bytes()
 }
 
-func (s *SessionOffer) UnmarshalBinary(data []byte) error {
+func (s *SessionOffer) Unmarshal(data []byte) error {
 	buf := bytes.NewReader(data)
 
 	read := func(v any) error {
@@ -95,17 +95,17 @@ type ClientKeepAlive struct {
 	SessionDurationMins uint16
 }
 
-func (c *ClientKeepAlive) MarshalBinary() ([]byte, error) {
+func (c *ClientKeepAlive) Marshal() []byte {
 	var buf bytes.Buffer
 
 	binary.Write(&buf, binary.LittleEndian, c.SessionID)
 	binary.Write(&buf, binary.LittleEndian, c.TimeMillis)
 	binary.Write(&buf, binary.LittleEndian, c.SessionDurationMins)
 
-	return buf.Bytes(), nil
+	return buf.Bytes()
 }
 
-func (c *ClientKeepAlive) UnmarshalBinary(data []byte) error {
+func (c *ClientKeepAlive) Unmarshal(data []byte) error {
 	buf := bytes.NewReader(data)
 
 	binary.Read(buf, binary.LittleEndian, &c.SessionID)
@@ -120,16 +120,16 @@ type ServerKeepAlive struct {
 	UptimeMillis uint32
 }
 
-func (s *ServerKeepAlive) MarshalBinary() ([]byte, error) {
+func (s *ServerKeepAlive) Marshal() []byte {
 	var buf bytes.Buffer
 
 	binary.Write(&buf, binary.LittleEndian, s.SessionID)
 	binary.Write(&buf, binary.LittleEndian, s.UptimeMillis)
 
-	return buf.Bytes(), nil
+	return buf.Bytes()
 }
 
-func (s *ServerKeepAlive) UnmarshalBinary(data []byte) error {
+func (s *ServerKeepAlive) Unmarshal(data []byte) error {
 	buf := bytes.NewReader(data)
 
 	binary.Read(buf, binary.LittleEndian, &s.SessionID)
@@ -140,11 +140,11 @@ func (s *ServerKeepAlive) UnmarshalBinary(data []byte) error {
 
 type KeepAliveRsp struct{}
 
-func (k *KeepAliveRsp) MarshalBinary() ([]byte, error) {
-	return []byte{}, nil
+func (k *KeepAliveRsp) Marshal() []byte {
+	return []byte{}
 }
 
-func (k *KeepAliveRsp) UnmarshalBinary(data []byte) error {
+func (k *KeepAliveRsp) Unmarshal(data []byte) error {
 	return nil
 }
 
@@ -155,7 +155,7 @@ type SessionAccept struct {
 	EncryptedMessage []byte
 }
 
-func (s *SessionAccept) MarshalBinary() ([]byte, error) {
+func (s *SessionAccept) Marshal() []byte {
 	var buf bytes.Buffer
 
 	write := func(v any) {
@@ -174,10 +174,10 @@ func (s *SessionAccept) MarshalBinary() ([]byte, error) {
 	buf.Write(s.EncryptedMessage)
 	buf.WriteByte(0)
 
-	return buf.Bytes(), nil
+	return buf.Bytes()
 }
 
-func (s *SessionAccept) UnmarshalBinary(data []byte) error {
+func (s *SessionAccept) Unmarshal(data []byte) error {
 	buf := bytes.NewReader(data)
 
 	read := func(v any) error {

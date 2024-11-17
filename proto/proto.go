@@ -2,7 +2,6 @@ package proto
 
 import (
 	"context"
-	"encoding"
 	"encoding/binary"
 	"fmt"
 	"net"
@@ -14,9 +13,17 @@ import (
 
 const heartbeatInterval = 10 * time.Second
 
+type MessageMarshaler interface {
+	Marshal() []byte
+}
+
+type MessageUnmarshaler interface {
+	Unmarshal([]byte) error
+}
+
 type Message interface {
-	encoding.BinaryMarshaler
-	encoding.BinaryUnmarshaler
+	MessageMarshaler
+	MessageUnmarshaler
 }
 
 type DMLMessage struct {
@@ -25,24 +32,24 @@ type DMLMessage struct {
 	Packet      []byte
 }
 
-func (d *DMLMessage) UnmarshalBinary(data []byte) error {
-	if len(data) < 4 {
+func (d *DMLMessage) Unmarshal(buf []byte) error {
+	if len(buf) < 4 {
 		return fmt.Errorf("invalid dml message")
 	}
 
-	d.ServiceID = data[0]
-	d.OrderNumber = data[1]
+	d.ServiceID = buf[0]
+	d.OrderNumber = buf[1]
 
-	dataLen := binary.LittleEndian.Uint16(data[2:4]) + 1
-	if dataLen > uint16(len(data)) {
+	dataLen := binary.LittleEndian.Uint16(buf[2:4]) + 1
+	if dataLen > uint16(len(buf)) {
 		return fmt.Errorf("invalid dml message")
 	}
-	d.Packet = data[4:dataLen]
+	d.Packet = buf[4:dataLen]
 
 	return nil
 }
 
-func (d DMLMessage) MarshalBinary() ([]byte, error) {
+func (d DMLMessage) Marshal() []byte {
 	buf := []byte{
 		d.ServiceID,
 		d.OrderNumber,
@@ -52,7 +59,7 @@ func (d DMLMessage) MarshalBinary() ([]byte, error) {
 	buf = binary.LittleEndian.AppendUint16(buf, uint16(dataLen))
 	buf = append(buf, d.Packet...)
 
-	return buf, nil
+	return buf
 }
 
 type Client struct {
@@ -60,8 +67,10 @@ type Client struct {
 
 	conn      net.Conn
 	controlRW controlReadWriter
-	controlCh chan *Frame
-	messageCh chan *Frame
+
+	readControlCh  chan *Frame
+	readMessageCh  chan *Frame
+	writeMessageCh chan *Frame
 
 	sessionID         uint16
 	sessionTimeSecs   uint32
@@ -89,13 +98,16 @@ func Dial(ctx context.Context, remote string, router *MessageRouter) (*Client, e
 
 		conn:      conn,
 		controlRW: controlRW,
-		controlCh: make(chan *Frame),
-		messageCh: make(chan *Frame),
+
+		readControlCh:  make(chan *Frame, 8),
+		readMessageCh:  make(chan *Frame, 8),
+		writeMessageCh: make(chan *Frame, 8),
 
 		sessionHeartbeat: time.NewTicker(heartbeatInterval),
 	}
 
 	go client.read()
+	go client.write()
 
 	if err := client.handshake(ctx); err != nil {
 		client.Close()
@@ -111,7 +123,7 @@ func Dial(ctx context.Context, remote string, router *MessageRouter) (*Client, e
 func (c *Client) handshake(ctx context.Context) error {
 	for {
 		select {
-		case frame := <-c.controlCh:
+		case frame := <-c.readControlCh:
 			c.handleControlFrame(frame)
 			if c.connected {
 				go c.heartbeat()
@@ -131,22 +143,16 @@ func (c *Client) heartbeat() {
 			SessionDurationMins: uint16(time.Since(c.sessionStart).Minutes()),
 		}
 
-		keepAliveBuf, _ := keepAlive.MarshalBinary()
-
-		frame := &Frame{
+		c.writeMessageCh <- &Frame{
 			Control:     true,
 			Opcode:      control.PktSessionKeepAlive,
-			MessageData: keepAliveBuf,
-		}
-
-		if err := c.controlRW.Write(frame); err != nil {
-			return
+			MessageData: keepAlive.Marshal(),
 		}
 	}
 }
 
 func (c *Client) handleControl() {
-	for frame := range c.controlCh {
+	for frame := range c.readControlCh {
 		c.handleControlFrame(frame)
 	}
 }
@@ -163,10 +169,10 @@ func (c *Client) handleControlFrame(frame *Frame) {
 }
 
 func (c *Client) handleMessages() {
-	for frame := range c.messageCh {
+	for frame := range c.readMessageCh {
 		var dmlMessage DMLMessage
 
-		if err := dmlMessage.UnmarshalBinary(frame.MessageData); err != nil {
+		if err := dmlMessage.Unmarshal(frame.MessageData); err != nil {
 			return
 		}
 
@@ -184,22 +190,16 @@ func (c *Client) handleMessages() {
 }
 
 func (c *Client) handleSessionKeepAlive(_ *Frame) {
-	keepAliveRspBuf, _ := (&control.KeepAliveRsp{}).MarshalBinary()
-
-	resp := &Frame{
+	c.writeMessageCh <- &Frame{
 		Control:     true,
 		Opcode:      control.PktSessionKeepAliveRsp,
-		MessageData: keepAliveRspBuf,
-	}
-
-	if err := c.controlRW.Write(resp); err != nil {
-		return
+		MessageData: (&control.KeepAliveRsp{}).Marshal(),
 	}
 }
 
 func (c *Client) handleSessionOffer(frame *Frame) {
 	offer := &control.SessionOffer{}
-	if err := offer.UnmarshalBinary(frame.MessageData); err != nil {
+	if err := offer.Unmarshal(frame.MessageData); err != nil {
 		return
 	}
 
@@ -208,16 +208,11 @@ func (c *Client) handleSessionOffer(frame *Frame) {
 		TimeMillis: offer.TimeMillis,
 		SessionID:  offer.SessionID,
 	}
-	acceptBuf, _ := accept.MarshalBinary()
 
-	resp := &Frame{
+	c.writeMessageCh <- &Frame{
 		Control:     true,
 		Opcode:      control.PktSessionAccept,
-		MessageData: acceptBuf,
-	}
-
-	if err := c.controlRW.Write(resp); err != nil {
-		return
+		MessageData: accept.Marshal(),
 	}
 
 	c.connected = true
@@ -235,9 +230,17 @@ func (c *Client) read() {
 		}
 
 		if frame.Control {
-			c.controlCh <- frame
+			c.readControlCh <- frame
 		} else {
-			c.messageCh <- frame
+			c.readMessageCh <- frame
+		}
+	}
+}
+
+func (c *Client) write() {
+	for frame := range c.writeMessageCh {
+		if err := c.controlRW.Write(frame); err != nil {
+			return
 		}
 	}
 }
@@ -255,26 +258,24 @@ func (c *Client) SessionTimeMillis() uint32 {
 }
 
 func (c *Client) WriteMessage(service, order byte, msg Message) error {
-	msgBuf, _ := msg.MarshalBinary()
-
 	dml := DMLMessage{
 		ServiceID:   service,
 		OrderNumber: order,
-		Packet:      msgBuf,
+		Packet:      msg.Marshal(),
 	}
 
-	buf, _ := dml.MarshalBinary()
+	c.writeMessageCh <- &Frame{
+		MessageData: dml.Marshal(),
+	}
 
-	return c.controlRW.Write(&Frame{
-		MessageData: buf,
-	})
+	return nil
 }
 
 func (c *Client) Close() error {
 	c.closeOnce.Do(func() {
 		c.sessionHeartbeat.Stop()
-		close(c.controlCh)
-		close(c.messageCh)
+		close(c.readControlCh)
+		close(c.readMessageCh)
 	})
 	return c.conn.Close()
 }
@@ -318,12 +319,12 @@ func RegisterMessageHandler[T any](router *MessageRouter, service, order byte, h
 		var msg T
 
 		// This sucks
-		dec, ok := any(&msg).(encoding.BinaryUnmarshaler)
+		dec, ok := any(&msg).(MessageUnmarshaler)
 		if !ok {
-			panic("message type does not implement encoding.BinaryUnmarshaler")
+			panic("message type does not implement proto.MessageUnmarshaler")
 		}
 
-		if err := dec.UnmarshalBinary(d.Packet); err != nil {
+		if err := dec.Unmarshal(d.Packet); err != nil {
 			return err
 		}
 

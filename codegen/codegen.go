@@ -280,14 +280,14 @@ func writeMessages(b io.Writer, pr Protocol) {
 		}
 		p(b, "}")
 
-		generateMarshalBinary(b, pr, msg)
+		generateMarshal(b, pr, msg)
 		p(b)
-		generateUnmarshalBinary(b, pr, msg)
+		generateUnmarshal(b, pr, msg)
 	}
 }
 
-func generateMarshalBinary(b io.Writer, pr Protocol, msg Message) {
-	p(b, "func (s *", msg.Type, ") MarshalBinary() ([]byte, error) {")
+func generateMarshal(b io.Writer, pr Protocol, msg Message) {
+	p(b, "func (s *", msg.Type, ") Marshal() []byte {")
 
 	if len(msg.Fields) == 0 {
 		p(b, "return []byte{}, nil")
@@ -317,12 +317,12 @@ func generateMarshalBinary(b io.Writer, pr Protocol, msg Message) {
 
 	}
 
-	p(b, "return b.Bytes(), nil")
+	p(b, "return b.Bytes()")
 	p(b, "}")
 }
 
-func generateUnmarshalBinary(b io.Writer, pr Protocol, msg Message) {
-	p(b, "func (s *", msg.Type, ") UnmarshalBinary(data []byte) error {")
+func generateUnmarshal(b io.Writer, pr Protocol, msg Message) {
+	p(b, "func (s *", msg.Type, ") Unmarshal(data []byte) error {")
 
 	if len(msg.Fields) == 0 {
 		p(b, "return nil")
