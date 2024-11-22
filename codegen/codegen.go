@@ -392,6 +392,22 @@ func compareMessageByTag(a, b Message) int {
 	return strings.Compare(a.Tag, b.Tag)
 }
 
+func dedupeMessagesByTag(messages []Message) []Message {
+	msgs := make([]Message, 0, len(messages))
+	msgNames := make([]string, 0, len(messages))
+
+	for _, msg := range messages {
+		if slices.Contains(msgNames, msg.Meta.MsgName) {
+			continue
+		}
+
+		msgs = append(msgs, msg)
+		msgNames = append(msgNames, msg.Meta.MsgName)
+	}
+
+	return msgs
+}
+
 func readMessages(doc *etree.Document, p *Protocol) error {
 	records := doc.FindElements("//RECORD")
 	if records == nil {
@@ -471,6 +487,8 @@ func readMessages(doc *etree.Document, p *Protocol) error {
 
 		p.Messages = append(p.Messages, msg)
 	}
+
+	p.Messages = dedupeMessagesByTag(p.Messages)
 
 	// Sort messages by name
 	slices.SortFunc(p.Messages, compareMessageByTag)
