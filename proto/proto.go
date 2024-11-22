@@ -65,8 +65,8 @@ func (d DMLMessage) Marshal() []byte {
 type Client struct {
 	router *MessageRouter
 
-	conn      net.Conn
-	controlRW controlReadWriter
+	conn    net.Conn
+	frameRW frameReadWriter
 
 	readControlCh  chan *Frame
 	readMessageCh  chan *Frame
@@ -88,16 +88,16 @@ func Dial(ctx context.Context, remote string, router *MessageRouter) (*Client, e
 		return nil, err
 	}
 
-	controlRW := controlReadWriter{
-		frameReader{conn},
-		frameWriter{conn},
+	frameRW := frameReadWriter{
+		FrameReader{conn},
+		FrameWriter{conn},
 	}
 
 	client := &Client{
 		router: router,
 
-		conn:      conn,
-		controlRW: controlRW,
+		conn:    conn,
+		frameRW: frameRW,
 
 		readControlCh:  make(chan *Frame, 8),
 		readMessageCh:  make(chan *Frame, 8),
@@ -125,6 +125,7 @@ func (c *Client) handshake(ctx context.Context) error {
 		select {
 		case frame := <-c.readControlCh:
 			c.handleControlFrame(frame)
+
 			if c.connected {
 				go c.heartbeat()
 				return nil
@@ -224,7 +225,7 @@ func (c *Client) handleSessionOffer(frame *Frame) {
 
 func (c *Client) read() {
 	for {
-		frame, err := c.controlRW.Read()
+		frame, err := c.frameRW.Read()
 		if err != nil {
 			return
 		}
@@ -239,7 +240,7 @@ func (c *Client) read() {
 
 func (c *Client) write() {
 	for frame := range c.writeMessageCh {
-		if err := c.controlRW.Write(frame); err != nil {
+		if err := c.frameRW.Write(frame); err != nil {
 			return
 		}
 	}

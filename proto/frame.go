@@ -9,17 +9,17 @@ import (
 
 const headerMagic uint16 = 0xF00D
 
-type frameReader struct {
-	reader io.Reader
+type FrameReader struct {
+	Reader io.Reader
 }
 
-type frameWriter struct {
+type FrameWriter struct {
 	writer io.Writer
 }
 
-type controlReadWriter struct {
-	frameReader
-	frameWriter
+type frameReadWriter struct {
+	FrameReader
+	FrameWriter
 }
 
 type Frame struct {
@@ -51,32 +51,32 @@ func (f *Frame) Marshal() []byte {
 	return buf
 }
 
-func (r *frameReader) Read() (*Frame, error) {
+func (r *FrameReader) Read() (*Frame, error) {
 	var (
 		magic  uint16
 		length uint16
 	)
 
-	if err := binary.Read(r.reader, binary.LittleEndian, &magic); err != nil {
+	if err := binary.Read(r.Reader, binary.LittleEndian, &magic); err != nil {
 		return nil, err
 	}
 	if magic != headerMagic {
 		return nil, fmt.Errorf("invalid frame, expected %v in header but got %v", headerMagic, magic)
 	}
 
-	if err := binary.Read(r.reader, binary.LittleEndian, &length); err != nil {
+	if err := binary.Read(r.Reader, binary.LittleEndian, &length); err != nil {
 		return nil, err
 	}
 
 	realLength := uint32(length)
 	if length >= 0x8000 {
-		if err := binary.Read(r.reader, binary.LittleEndian, &realLength); err != nil {
+		if err := binary.Read(r.Reader, binary.LittleEndian, &realLength); err != nil {
 			return nil, err
 		}
 	}
 
 	rawFrame := make([]byte, realLength)
-	if _, err := io.ReadFull(r.reader, rawFrame); err != nil {
+	if _, err := io.ReadFull(r.Reader, rawFrame); err != nil {
 		return nil, err
 	}
 
@@ -88,7 +88,7 @@ func (r *frameReader) Read() (*Frame, error) {
 	return frame, nil
 }
 
-func (w *frameWriter) Write(frame *Frame) error {
+func (w *FrameWriter) Write(frame *Frame) error {
 	rawFrame := frame.Marshal()
 
 	if err := binary.Write(w.writer, binary.LittleEndian, headerMagic); err != nil {
