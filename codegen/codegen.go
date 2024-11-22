@@ -86,15 +86,16 @@ type Field struct {
 }
 
 type Message struct {
-	Type string
-	Meta struct {
+	Type   string
+	Tag    string
+	Fields []Field
+	Meta   struct {
 		MsgOrder       string
 		MsgName        string
 		MsgDescription string
 		MsgHandler     string
 		MsgAccessLvl   string
 	}
-	Fields []Field
 }
 
 type Protocol struct {
@@ -387,8 +388,8 @@ func readProtocol(doc *etree.Document, p *Protocol) error {
 	return nil
 }
 
-func compareMessageByName(a, b Message) int {
-	return strings.Compare(a.Meta.MsgName, b.Meta.MsgName)
+func compareMessageByTag(a, b Message) int {
+	return strings.Compare(a.Tag, b.Tag)
 }
 
 func readMessages(doc *etree.Document, p *Protocol) error {
@@ -408,23 +409,45 @@ func readMessages(doc *etree.Document, p *Protocol) error {
 			return ErrInvalidRecord
 		}
 
-		var msg Message
+		parent := record.Parent()
+		if parent == nil {
+			return ErrInvalidRecord
+		}
+
+		msg := Message{
+			Tag: parent.Tag,
+		}
 
 		for _, field := range fields {
 			txt := field.Text()
 
 			switch field.Tag {
 			case "_MsgOrder":
+				if !hasNoXfer(field) {
+					return fmt.Errorf("%w: expected NOXFER for field", ErrInvalidMessage)
+				}
 				msg.Meta.MsgOrder = txt
 			case "_MsgName":
+				if !hasNoXfer(field) {
+					return fmt.Errorf("%w: expected NOXFER for field", ErrInvalidMessage)
+				}
 				msg.Meta.MsgName = txt
 			case "_MsgDescription":
+				if !hasNoXfer(field) {
+					return fmt.Errorf("%w: expected NOXFER for field", ErrInvalidMessage)
+				}
 				msg.Meta.MsgDescription = txt
 			case "_MsgHandler":
+				if !hasNoXfer(field) {
+					return fmt.Errorf("%w: expected NOXFER for field", ErrInvalidMessage)
+				}
 				// Use the handler name as the message type because it's already PascalCased for us
 				msg.Type = strings.ReplaceAll(txt[4:], "_", "")
 				msg.Meta.MsgHandler = txt
 			case "_MsgAccessLvl":
+				if !hasNoXfer(field) {
+					return fmt.Errorf("%w: expected NOXFER for field", ErrInvalidMessage)
+				}
 				msg.Meta.MsgAccessLvl = txt
 			default:
 				attr := field.SelectAttr("TYPE")
@@ -450,7 +473,7 @@ func readMessages(doc *etree.Document, p *Protocol) error {
 	}
 
 	// Sort messages by name
-	slices.SortFunc(p.Messages, compareMessageByName)
+	slices.SortFunc(p.Messages, compareMessageByTag)
 
 	for i, msg := range p.Messages {
 		// If no explicit MsgOrder, use the implicit order from the index of the sorted messages
@@ -460,6 +483,14 @@ func readMessages(doc *etree.Document, p *Protocol) error {
 	}
 
 	return nil
+}
+
+func hasNoXfer(record *etree.Element) bool {
+	attr := record.SelectAttr("NOXFER")
+	if attr == nil {
+		return false
+	}
+	return attr.Value == "TRUE"
 }
 
 func readProtocolInfo(doc *etree.Document, p *Protocol) error {
