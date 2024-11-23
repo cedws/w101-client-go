@@ -7,6 +7,7 @@ import (
 	"go/format"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/beevik/etree"
@@ -90,7 +91,7 @@ type Message struct {
 	Tag    string
 	Fields []Field
 	Meta   struct {
-		MsgOrder       string
+		MsgOrder       int
 		MsgName        string
 		MsgDescription string
 		MsgHandler     string
@@ -178,7 +179,7 @@ func Generate(w io.Writer, packageName string, pr Protocol) error {
 
 	p(&b, "func Register", pr.Service, "Service(r *proto.MessageRouter, s ", unexport(pr.Service), "Service) {")
 	for _, msg := range pr.Messages {
-		p(&b, "proto.RegisterMessageHandler(r, ", pr.Meta.ServiceID, ",", msg.Meta.MsgOrder, ",", "s.", msg.Type, ")")
+		p(&b, "proto.RegisterMessageHandler(r, ", pr.Meta.ServiceID, ",", fmt.Sprint(msg.Meta.MsgOrder), ",", "s.", msg.Type, ")")
 	}
 	p(&b, "}")
 
@@ -191,7 +192,7 @@ func Generate(w io.Writer, packageName string, pr Protocol) error {
 	for _, msg := range pr.Messages {
 		p(&b)
 		p(&b, "func (c ", pr.Service, "Client) ", msg.Type, "(m *", msg.Type, ") error {")
-		p(&b, "return c.c.WriteMessage(", pr.Meta.ServiceID, ",", msg.Meta.MsgOrder, ", m)")
+		p(&b, "return c.c.WriteMessage(", pr.Meta.ServiceID, ",", fmt.Sprint(msg.Meta.MsgOrder), ", m)")
 		p(&b, "}")
 	}
 
@@ -392,6 +393,10 @@ func compareMessageByTag(a, b Message) int {
 	return strings.Compare(a.Tag, b.Tag)
 }
 
+func compareMessageByOrder(a, b Message) int {
+	return a.Meta.MsgOrder - b.Meta.MsgOrder
+}
+
 func dedupeMessagesByTag(messages []Message) []Message {
 	msgs := make([]Message, 0, len(messages))
 	msgNames := make([]string, 0, len(messages))
@@ -442,7 +447,11 @@ func readMessages(doc *etree.Document, p *Protocol) error {
 				if !hasNoXfer(field) {
 					return fmt.Errorf("%w: expected NOXFER for field", ErrInvalidMessage)
 				}
-				msg.Meta.MsgOrder = txt
+				order, err := strconv.ParseInt(txt, 10, 64)
+				if err != nil {
+					return fmt.Errorf("%w: invalid message order %v", ErrInvalidMessage, txt)
+				}
+				msg.Meta.MsgOrder = int(order)
 			case "_MsgName":
 				if !hasNoXfer(field) {
 					return fmt.Errorf("%w: expected NOXFER for field", ErrInvalidMessage)
@@ -490,15 +499,19 @@ func readMessages(doc *etree.Document, p *Protocol) error {
 
 	p.Messages = dedupeMessagesByTag(p.Messages)
 
-	// Sort messages by name
+	// Sort messages by tag
 	slices.SortFunc(p.Messages, compareMessageByTag)
 
 	for i, msg := range p.Messages {
-		// If no explicit MsgOrder, use the implicit order from the index of the sorted messages
-		if msg.Meta.MsgOrder == "" {
-			p.Messages[i].Meta.MsgOrder = fmt.Sprint(i + 1)
+		// If no explicit MsgOrder, use the implicit order from sorted slice
+		// MsgOrder is 1-indexed, so zero value is unset
+		if msg.Meta.MsgOrder == 0 {
+			p.Messages[i].Meta.MsgOrder = i + 1
 		}
 	}
+
+	// Sort messages by order
+	slices.SortFunc(p.Messages, compareMessageByOrder)
 
 	return nil
 }
