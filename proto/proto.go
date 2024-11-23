@@ -72,12 +72,9 @@ type Client struct {
 	readMessageCh  chan *Frame
 	writeMessageCh chan *Frame
 
-	sessionID         uint16
-	sessionTimeSecs   uint32
-	sessionTimeMillis uint32
-	sessionStart      time.Time
-	sessionHeartbeat  *time.Ticker
-	connected         bool
+	session          Session
+	sessionHeartbeat *time.Ticker
+	connected        bool
 
 	closeOnce sync.Once
 }
@@ -139,9 +136,9 @@ func (c *Client) handshake(ctx context.Context) error {
 func (c *Client) heartbeat() {
 	for range c.sessionHeartbeat.C {
 		keepAlive := &control.ClientKeepAlive{
-			SessionID:           c.sessionID,
+			SessionID:           c.session.ID,
 			TimeMillis:          uint16(time.Now().Nanosecond() / 1_000_000),
-			SessionDurationMins: uint16(time.Since(c.sessionStart).Minutes()),
+			SessionDurationMins: uint16(time.Since(c.session.Start).Minutes()),
 		}
 
 		c.writeMessageCh <- &Frame{
@@ -172,20 +169,13 @@ func (c *Client) handleControlFrame(frame *Frame) {
 func (c *Client) handleMessages() {
 	for frame := range c.readMessageCh {
 		var dmlMessage DMLMessage
-
 		if err := dmlMessage.Unmarshal(frame.MessageData); err != nil {
 			return
 		}
 
-		handlers, ok := c.router.Handlers(dmlMessage.ServiceID, dmlMessage.OrderNumber)
-		if !ok {
+		if err := c.router.Handle(dmlMessage.ServiceID, dmlMessage.OrderNumber, dmlMessage); err == nil {
+			c.Close()
 			return
-		}
-
-		for _, handler := range handlers {
-			if err := handler(dmlMessage); err != nil {
-				c.Close()
-			}
 		}
 	}
 }
@@ -217,10 +207,12 @@ func (c *Client) handleSessionOffer(frame *Frame) {
 	}
 
 	c.connected = true
-	c.sessionID = offer.SessionID
-	c.sessionTimeSecs = offer.TimeSecs
-	c.sessionTimeMillis = offer.TimeMillis
-	c.sessionStart = time.Now()
+	c.session = Session{
+		ID:         offer.SessionID,
+		TimeSecs:   offer.TimeSecs,
+		TimeMillis: offer.TimeMillis,
+		Start:      time.Now(),
+	}
 }
 
 func (c *Client) read() {
@@ -247,15 +239,15 @@ func (c *Client) write() {
 }
 
 func (c *Client) SessionID() uint16 {
-	return c.sessionID
+	return c.session.ID
 }
 
 func (c *Client) SessionTimeSecs() uint32 {
-	return c.sessionTimeSecs
+	return c.session.TimeSecs
 }
 
 func (c *Client) SessionTimeMillis() uint32 {
-	return c.sessionTimeMillis
+	return c.session.TimeMillis
 }
 
 func (c *Client) WriteMessage(service, order byte, msg Message) error {
@@ -277,6 +269,7 @@ func (c *Client) Close() error {
 		c.sessionHeartbeat.Stop()
 		close(c.readControlCh)
 		close(c.readMessageCh)
+		close(c.writeMessageCh)
 	})
 	return c.conn.Close()
 }
@@ -295,16 +288,22 @@ func NewMessageRouter() *MessageRouter {
 	}
 }
 
-func (r *MessageRouter) Handlers(service, order byte) ([]func(DMLMessage) error, bool) {
+func (r *MessageRouter) Handle(service, order byte, d DMLMessage) error {
 	if _, ok := r.serviceRoutes[service]; !ok {
-		return nil, false
+		r.serviceRoutes[service] = make(messageRouter)
 	}
 
 	if _, ok := r.serviceRoutes[service][order]; !ok {
-		return nil, false
+		r.serviceRoutes[service][order] = make([]func(DMLMessage) error, 0)
 	}
 
-	return r.serviceRoutes[service][order], true
+	for _, handler := range r.serviceRoutes[service][order] {
+		if err := handler(d); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func RegisterMessageHandler[T any](router *MessageRouter, service, order byte, handler func(T)) {
