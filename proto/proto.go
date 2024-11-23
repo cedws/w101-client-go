@@ -279,6 +279,7 @@ type messageRouter map[byte][]func(DMLMessage) error
 type serviceRouter map[byte]messageRouter
 
 type MessageRouter struct {
+	middleware    []func(any)
 	serviceRoutes serviceRouter
 }
 
@@ -306,6 +307,20 @@ func (r *MessageRouter) Handle(service, order byte, d DMLMessage) error {
 	return nil
 }
 
+// RegisterMiddleware registers a middleware function that will be called for every message
+// that matches type T. Middleware can receive every message by registering middleware that
+// receives the *any* type.
+func RegisterMiddleware[T any](router *MessageRouter, handler func(T)) {
+	handleFunc := func(msg any) {
+		msgType, ok := msg.(T)
+		if ok {
+			handler(msgType)
+		}
+	}
+
+	router.middleware = append(router.middleware, handleFunc)
+}
+
 func RegisterMessageHandler[T any](router *MessageRouter, service, order byte, handler func(T)) {
 	if _, ok := router.serviceRoutes[service]; !ok {
 		router.serviceRoutes[service] = make(messageRouter)
@@ -326,6 +341,10 @@ func RegisterMessageHandler[T any](router *MessageRouter, service, order byte, h
 
 		if err := dec.Unmarshal(d.Packet); err != nil {
 			return err
+		}
+
+		for _, middleware := range router.middleware {
+			middleware(msg)
 		}
 
 		handler(msg)
