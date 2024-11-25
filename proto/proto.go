@@ -80,7 +80,8 @@ type Client struct {
 }
 
 func Dial(ctx context.Context, remote string, router *MessageRouter) (*Client, error) {
-	conn, err := net.Dial("tcp", remote)
+	dialer := &net.Dialer{}
+	conn, err := dialer.DialContext(ctx, "tcp", remote)
 	if err != nil {
 		return nil, err
 	}
