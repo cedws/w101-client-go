@@ -275,30 +275,20 @@ func (c *Client) Close() error {
 	return c.conn.Close()
 }
 
-type messageRouter map[byte][]func(DMLMessage) error
+type messageRouter [255][]func(DMLMessage) error
 
-type serviceRouter map[byte]messageRouter
+type serviceRouter [255]messageRouter
 
 type MessageRouter struct {
 	middleware    []func(any)
 	serviceRoutes serviceRouter
 }
 
-func NewMessageRouter() *MessageRouter {
-	return &MessageRouter{
-		serviceRoutes: make(serviceRouter),
-	}
+func NewMessageRouter() MessageRouter {
+	return MessageRouter{}
 }
 
 func (r *MessageRouter) Handle(service, order byte, d DMLMessage) error {
-	if _, ok := r.serviceRoutes[service]; !ok {
-		r.serviceRoutes[service] = make(messageRouter)
-	}
-
-	if _, ok := r.serviceRoutes[service][order]; !ok {
-		r.serviceRoutes[service][order] = make([]func(DMLMessage) error, 0)
-	}
-
 	for _, handler := range r.serviceRoutes[service][order] {
 		if err := handler(d); err != nil {
 			return err
@@ -323,14 +313,6 @@ func RegisterMiddleware[T any](router *MessageRouter, handler func(T)) {
 }
 
 func RegisterMessageHandler[T any](router *MessageRouter, service, order byte, handler func(T)) {
-	if _, ok := router.serviceRoutes[service]; !ok {
-		router.serviceRoutes[service] = make(messageRouter)
-	}
-
-	if _, ok := router.serviceRoutes[service][order]; !ok {
-		router.serviceRoutes[service][order] = make([]func(DMLMessage) error, 0)
-	}
-
 	decodeFunc := func(d DMLMessage) error {
 		var msg T
 
