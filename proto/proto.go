@@ -108,7 +108,6 @@ func Dial(ctx context.Context, remote string, router *MessageRouter) (*Client, e
 	go client.write()
 
 	if err := client.handshake(ctx); err != nil {
-		client.Close()
 		return nil, fmt.Errorf("session handshake failed: %w", err)
 	}
 
@@ -121,7 +120,11 @@ func Dial(ctx context.Context, remote string, router *MessageRouter) (*Client, e
 func (c *Client) handshake(ctx context.Context) error {
 	for {
 		select {
-		case frame := <-c.readControlCh:
+		case frame, ok := <-c.readControlCh:
+			if !ok {
+				return fmt.Errorf("connection closed before handshake")
+			}
+
 			c.handleControlFrame(frame)
 
 			if c.connected {
@@ -174,7 +177,7 @@ func (c *Client) handleMessages() {
 			return
 		}
 
-		if err := c.router.Handle(dmlMessage.ServiceID, dmlMessage.OrderNumber, dmlMessage); err == nil {
+		if err := c.router.Handle(dmlMessage.ServiceID, dmlMessage.OrderNumber, dmlMessage); err != nil {
 			c.Close()
 			return
 		}
@@ -217,6 +220,8 @@ func (c *Client) handleSessionOffer(frame *Frame) {
 }
 
 func (c *Client) read() {
+	defer c.Close()
+
 	for {
 		frame, err := c.frameRW.Read()
 		if err != nil {
@@ -232,6 +237,8 @@ func (c *Client) read() {
 }
 
 func (c *Client) write() {
+	defer c.Close()
+
 	for frame := range c.writeMessageCh {
 		if err := c.frameRW.Write(frame); err != nil {
 			return
