@@ -2,6 +2,7 @@ package codegen
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"go/format"
@@ -207,6 +208,47 @@ func Generate(w io.Writer, packageName string, pr Protocol) error {
 	return nil
 }
 
+func parseDMLType(dmlType string) (DMLType, bool) {
+	if d := DMLType(dmlType); slices.Contains(dmlTypes, d) {
+		return d, true
+	}
+
+	return "", false
+}
+
+func dmlTypeSize(dmlType DMLType) int {
+	switch dmlType {
+	case dmlByt:
+		return 1
+	case dmlUbyt:
+		return 1
+	case dmlShrt:
+		return 2
+	case dmlUshrt:
+		return 2
+	case dmlInt:
+		return 4
+	case dmlUint:
+		return 4
+	case dmlStr:
+		// variable length, add 2 bytes for length prefix
+		return 2
+	case dmlWstr:
+		// variable length, add 2 bytes for length prefix
+		return 2
+	case dmlFlt:
+		return 4
+	case dmlDbl:
+		return 8
+	case dmlGid:
+		return 8
+	case dmlBool:
+		return 1
+	default:
+		panic(fmt.Sprintf("codegen: unhandled field type %v", dmlType))
+	}
+}
+
 func unexport(s string) string {
 	if len(s) == 0 {
 		return ""
@@ -234,45 +276,38 @@ func reformat(in *bytes.Buffer, out io.Writer) error {
 
 func msgBaseSize(msg Message) (size int) {
 	for _, field := range msg.Fields {
-		switch field.Type {
-		case dmlByt:
-			size += 1
-		case dmlUbyt:
-			size += 1
-		case dmlShrt:
-			size += 2
-		case dmlUshrt:
-			size += 2
-		case dmlInt:
-			size += 4
-		case dmlUint:
-			size += 4
-		case dmlStr:
-			// variable length, add 2 bytes for length prefix
-			size += 2
-		case dmlWstr:
-			// variable length, add 2 bytes for length prefix
-			size += 2
-		case dmlFlt:
-			size += 4
-		case dmlDbl:
-			size += 8
-		case dmlGid:
-			size += 8
-		case dmlBool:
-			size += 1
-		default:
-			panic(fmt.Sprintf("codegen: unhandled field type %v", field.Type))
-		}
+		size += dmlTypeSize(field.Type)
 	}
 
 	return
 }
 
+func compareFieldSize(a, b Field) int {
+	if a.Type == dmlStr || a.Type == dmlWstr {
+		return -1
+	}
+
+	if b.Type == dmlStr || b.Type == dmlWstr {
+		return 1
+	}
+
+	sizeA := dmlTypeSize(a.Type)
+	sizeB := dmlTypeSize(b.Type)
+
+	return cmp.Compare(sizeA, sizeB) * -1
+}
+
 func writeMessages(b io.Writer, pr Protocol) {
 	for _, msg := range pr.Messages {
 		p(b, "type ", msg.Type, " struct {")
-		for _, field := range msg.Fields {
+
+		fields := make([]Field, len(msg.Fields))
+		copy(fields, msg.Fields)
+
+		// Sort fields by size to optimise alignment, strings come first
+		slices.SortFunc(fields, compareFieldSize)
+
+		for _, field := range fields {
 			goType, ok := dmlAsGoTypes[field.Type]
 			if !ok {
 				panic(fmt.Sprintf("codegen: unknown field type %v", field.Type))
@@ -425,11 +460,6 @@ func readMessages(doc *etree.Document, p *Protocol) error {
 
 	// Skip first record which is protocol info
 	for _, record := range records[1:] {
-		fields := record.FindElements("*")
-		if fields == nil {
-			return ErrInvalidRecord
-		}
-
 		parent := record.Parent()
 		if parent == nil {
 			return ErrInvalidRecord
@@ -439,59 +469,48 @@ func readMessages(doc *etree.Document, p *Protocol) error {
 			Tag: parent.Tag,
 		}
 
+		if err := readMessageOrder(record, &msg); err != nil {
+			return err
+		}
+
+		if err := readMessageName(record, &msg); err != nil {
+			return err
+		}
+
+		if err := readMessageDescription(record, &msg); err != nil {
+			return err
+		}
+
+		if err := readMessageHandler(record, &msg); err != nil {
+			return err
+		}
+
+		fields := record.FindElements("*")
+		if fields == nil {
+			return ErrInvalidRecord
+		}
+
 		for _, field := range fields {
-			txt := field.Text()
-
-			switch field.Tag {
-			case "_MsgOrder":
-				if !hasNoXfer(field) {
-					return fmt.Errorf("%w: expected NOXFER for field", ErrInvalidMessage)
-				}
-				order, err := strconv.ParseInt(txt, 10, 64)
-				if err != nil {
-					return fmt.Errorf("%w: invalid message order %v", ErrInvalidMessage, txt)
-				}
-				msg.Meta.MsgOrder = int(order)
-			case "_MsgName":
-				if !hasNoXfer(field) {
-					return fmt.Errorf("%w: expected NOXFER for field", ErrInvalidMessage)
-				}
-				msg.Meta.MsgName = txt
-			case "_MsgDescription":
-				if !hasNoXfer(field) {
-					return fmt.Errorf("%w: expected NOXFER for field", ErrInvalidMessage)
-				}
-				msg.Meta.MsgDescription = txt
-			case "_MsgHandler":
-				if !hasNoXfer(field) {
-					return fmt.Errorf("%w: expected NOXFER for field", ErrInvalidMessage)
-				}
-				// Use the handler name as the message type because it's already PascalCased for us
-				msg.Type = strings.ReplaceAll(txt[4:], "_", "")
-				msg.Meta.MsgHandler = txt
-			case "_MsgAccessLvl":
-				if !hasNoXfer(field) {
-					return fmt.Errorf("%w: expected NOXFER for field", ErrInvalidMessage)
-				}
-				msg.Meta.MsgAccessLvl = txt
-			default:
-				attr := field.SelectAttr("TYPE")
-				if attr == nil {
-					continue
-				}
-
-				dmlType, ok := parseDMLType(attr.Value)
-				if !ok {
-					return fmt.Errorf("%w: invalid type %v", ErrInvalidMessage, attr.Value)
-				}
-
-				field := Field{
-					Name: titleCaserNoLower.String(field.Tag),
-					Type: dmlType,
-				}
-
-				msg.Fields = append(msg.Fields, field)
+			if field.SelectAttr("NOXFER") != nil {
+				continue
 			}
+
+			attr := field.SelectAttr("TYPE")
+			if attr == nil {
+				continue
+			}
+
+			dmlType, ok := parseDMLType(attr.Value)
+			if !ok {
+				return fmt.Errorf("%w: invalid type %v", ErrInvalidMessage, attr.Value)
+			}
+
+			field := Field{
+				Name: titleCaserNoLower.String(field.Tag),
+				Type: dmlType,
+			}
+
+			msg.Fields = append(msg.Fields, field)
 		}
 
 		p.Messages = append(p.Messages, msg)
@@ -516,12 +535,46 @@ func readMessages(doc *etree.Document, p *Protocol) error {
 	return nil
 }
 
-func hasNoXfer(record *etree.Element) bool {
-	attr := record.SelectAttr("NOXFER")
-	if attr == nil {
-		return false
+func readMessageOrder(record *etree.Element, msg *Message) error {
+	fields := record.FindElement("_MsgOrder[@NOXFER='TRUE']")
+	if fields == nil {
+		// MsgOrder is optional
+		return nil
 	}
-	return attr.Value == "TRUE"
+	order, err := strconv.ParseInt(fields.Text(), 10, 64)
+	if err != nil {
+		return fmt.Errorf("%w: invalid message order %v", ErrInvalidMessage, fields.Text())
+	}
+	msg.Meta.MsgOrder = int(order)
+	return nil
+}
+
+func readMessageName(record *etree.Element, msg *Message) error {
+	field := record.FindElement("_MsgName[@NOXFER='TRUE']")
+	if field == nil {
+		return ErrInvalidRecord
+	}
+	msg.Meta.MsgName = field.Text()
+	return nil
+}
+
+func readMessageDescription(record *etree.Element, msg *Message) error {
+	field := record.FindElement("_MsgDescription[@NOXFER='TRUE']")
+	if field == nil {
+		return ErrInvalidRecord
+	}
+	msg.Meta.MsgDescription = field.Text()
+	return nil
+}
+
+func readMessageHandler(record *etree.Element, msg *Message) error {
+	field := record.FindElement("_MsgHandler[@NOXFER='TRUE']")
+	if field == nil {
+		return ErrInvalidRecord
+	}
+	msg.Type = strings.ReplaceAll(field.Text()[4:], "_", "")
+	msg.Meta.MsgHandler = field.Text()
+	return nil
 }
 
 func readProtocolInfo(doc *etree.Document, p *Protocol) error {
@@ -556,12 +609,4 @@ func readProtocolInfo(doc *etree.Document, p *Protocol) error {
 	p.Service = service
 
 	return nil
-}
-
-func parseDMLType(dmlType string) (DMLType, bool) {
-	if d := DMLType(dmlType); slices.Contains(dmlTypes, d) {
-		return d, true
-	}
-
-	return "", false
 }
