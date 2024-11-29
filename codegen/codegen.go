@@ -416,12 +416,11 @@ func generateUnmarshal(b io.Writer, msg Message) {
 	p(b, "var err error")
 
 	for _, field := range msg.Fields {
-		switch field.Type {
-		case dmlStr, dmlWstr:
+		if dmlStringType(field.Type) {
 			p(b, "if s.", field.Name, ", err = codegen.ReadString(b); err != nil {")
 			p(b, "return err")
 			p(b, "}")
-		default:
+		} else {
 			p(b, "if err = binary.Read(b, binary.LittleEndian, &s.", field.Name, "); err != nil {")
 			p(b, "return err")
 			p(b, "}")
