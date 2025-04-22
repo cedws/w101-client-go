@@ -394,6 +394,8 @@ func generateMarshal(b io.Writer, msg Message) {
 
 	for _, field := range msg.Fields {
 		if dmlStringType(field.Type) {
+			p(b, "codegen.WriteString(b, s.", field.Name, ")")
+		} else {
 			p(b, "binary.Write(b, binary.LittleEndian, s.", field.Name, ")")
 		}
 	}
